@@ -56,6 +56,8 @@ def build_nexus() -> HouseOmega:
         A fully initialised HouseOmega ready to accept cycles.
     """
     graph = KnowledgeGraph()
+    loaded = graph.persistence.last_load_count
+    print(f"  Beliefs loaded from disk: {loaded}")
 
     router = ModelRouter()
     house_b = HouseB(knowledge_graph=graph, router=router)
@@ -99,7 +101,7 @@ def build_nexus() -> HouseOmega:
 
     print("  Injecting starter beliefs...")
     result = graph.inject_external_signal(starter_beliefs)
-    print(f"  Added: {result['added']}  Rejected: {result['rejected']}")
+    print(f"  New beliefs added: {result['added']}  Rejected: {result['rejected']}")
     print()
 
     print("  Knowledge Graph seeded:")
@@ -248,6 +250,12 @@ def main() -> int:
     print(f"  Cycles:  {health.total_cycles}")
     print(f"  Beliefs: {health.total_beliefs}")
     print(f"  Domains: {', '.join(health.domains_covered) or '(none)'}")
+    print()
+
+    nexus.knowledge_graph.persistence.save(nexus.knowledge_graph)
+    saved = len([b for b in nexus.knowledge_graph.beliefs.values()
+                 if b.is_valid() and not b.is_expired()])
+    print(f"  Saved to disk: {saved} beliefs")
     print()
 
     print("  NEXUS shutdown complete.")

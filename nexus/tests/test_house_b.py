@@ -48,7 +48,11 @@ def _make_cert(
 
 def _make_graph(*certs: BeliefCertificate) -> KnowledgeGraph:
     """Build a KnowledgeGraph from a list of certificates."""
-    graph = KnowledgeGraph()
+    import tempfile
+    import uuid
+    from pathlib import Path
+    path = str(Path(tempfile.gettempdir()) / f"nexus_hb_{uuid.uuid4().hex}.json")
+    graph = KnowledgeGraph(storage_path=path)
     for c in certs:
         graph.add_belief(c)
     return graph

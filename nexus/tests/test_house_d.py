@@ -9,7 +9,10 @@ and promotion gating.
 from __future__ import annotations
 
 import json
+import tempfile
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -51,7 +54,11 @@ def _make_cert(
 
 
 def _make_graph(*certs: BeliefCertificate) -> KnowledgeGraph:
-    graph = KnowledgeGraph()
+    import tempfile
+    import uuid
+    from pathlib import Path
+    path = str(Path(tempfile.gettempdir()) / f"nexus_hd_{uuid.uuid4().hex}.json")
+    graph = KnowledgeGraph(storage_path=path)
     for c in certs:
         graph.add_belief(c)
     return graph

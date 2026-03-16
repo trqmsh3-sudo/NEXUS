@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from nexus.core.belief_certificate import BeliefCertificate
+from nexus.core.external_signal import ExternalSignalProvider
 from nexus.core.house_b import HouseB, StructuredSpecificationObject
 from nexus.core.house_c import BuildResult, HouseC
 from nexus.core.house_d import DestructionReport, HouseD
@@ -162,6 +163,7 @@ class HouseOmega:
     house_d: HouseD
     cycle_count: int = 0
     sleep_cycle_interval: int = 50
+    external_signal_interval: int = 10
     max_refinements: int = 3
     cycle_history: list[CycleResult] = field(default_factory=list)
     created_at: datetime = field(
@@ -382,6 +384,8 @@ class HouseOmega:
         self._last_sleep = datetime.now(timezone.utc)
         elapsed = time.perf_counter() - start
 
+        self.knowledge_graph.persistence.save(self.knowledge_graph)
+
         logger.info(
             "OMEGA sleep cycle complete  pruned=%d  flagged=%d  "
             "contradictions=%d  elapsed=%.2fs",
@@ -535,9 +539,12 @@ class HouseOmega:
     # ------------------------------------------------------------------
 
     def _finalise_cycle(self, result: CycleResult) -> None:
-        """Post-cycle bookkeeping: increment counter, log, sleep check."""
+        """Post-cycle bookkeeping: increment counter, log, sleep/external check."""
         self.cycle_count += 1
         self._log_cycle(result)
+
+        if self.cycle_count % self.external_signal_interval == 0:
+            self._inject_automatic_external_signal()
 
         if self.cycle_count % self.sleep_cycle_interval == 0:
             logger.info(
@@ -545,6 +552,33 @@ class HouseOmega:
                 self.cycle_count,
             )
             self.run_sleep_cycle()
+
+    def _inject_automatic_external_signal(self) -> None:
+        """IRON LAW: Inject fresh external knowledge every N cycles."""
+        try:
+            provider = ExternalSignalProvider()
+            beliefs = provider.fetch_all()
+            if beliefs:
+                result = self.inject_external_knowledge(beliefs)
+                logger.info(
+                    "External signal injected: %d new beliefs  "
+                    "(submitted=%d  survived_d=%d  added=%d  rejected=%d)",
+                    result["added_to_a"],
+                    result["submitted"],
+                    result["survived_d"],
+                    result["added_to_a"],
+                    result["rejected"],
+                )
+            else:
+                logger.info(
+                    "External signal skipped: no beliefs fetched  cycle=%d",
+                    self.cycle_count,
+                )
+        except Exception as exc:
+            logger.warning(
+                "External signal injection failed  cycle=%d  error=%s",
+                self.cycle_count, exc,
+            )
 
     def _persist_history(self) -> None:
         """Write the full cycle history to ``data/cycle_history.json``."""

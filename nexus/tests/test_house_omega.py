@@ -123,7 +123,11 @@ def _make_omega(
     sleep_interval: int = 50,
 ) -> HouseOmega:
     """Build a HouseOmega with real KnowledgeGraph and mocked Houses."""
-    kg = KnowledgeGraph()
+    import tempfile
+    import uuid
+    from pathlib import Path
+    path = str(Path(tempfile.gettempdir()) / f"nexus_omega_{uuid.uuid4().hex}.json")
+    kg = KnowledgeGraph(storage_path=path)
     return HouseOmega(
         knowledge_graph=kg,
         house_b=MagicMock(spec=HouseB),

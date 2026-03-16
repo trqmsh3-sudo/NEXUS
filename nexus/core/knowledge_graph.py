@@ -8,13 +8,12 @@ passing ``is_valid()`` and ``is_expired() == False``.
 
 from __future__ import annotations
 
-import json
 import logging
-import pathlib
 from dataclasses import dataclass, field
 from typing import Any, Iterator
 
 from nexus.core.belief_certificate import BeliefCertificate
+from nexus.core.persistence import PersistenceManager
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -40,6 +39,16 @@ class KnowledgeGraph:
     beliefs: dict[str, BeliefCertificate] = field(default_factory=dict)
     graph: dict[str, set[str]] = field(default_factory=dict)
     domain_index: dict[str, set[str]] = field(default_factory=dict)
+    storage_path: str | None = None
+    persistence: PersistenceManager = field(init=False)
+
+    def __post_init__(self) -> None:
+        path = self.storage_path or "data/knowledge_store/beliefs.json"
+        self.persistence = PersistenceManager(storage_path=path)
+        loaded = self.persistence.load()
+        for belief in loaded:
+            self.beliefs[belief.claim] = belief
+            self._index_belief(belief)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -123,6 +132,7 @@ class KnowledgeGraph:
         self.beliefs[belief.claim] = belief
         self._index_belief(belief)
         logger.info("ACCEPTED claim=%r  domain=%r  confidence=%s", belief.claim, belief.domain, belief.confidence)
+        self.persistence.auto_save(self)
         return True
 
     # ------------------------------------------------------------------
@@ -365,42 +375,6 @@ class KnowledgeGraph:
             "average_confidence": avg_confidence,
             "without_executable_proof": without_proof,
         }
-
-    # ------------------------------------------------------------------
-    # Persistence
-    # ------------------------------------------------------------------
-
-    def save(self, path: pathlib.Path) -> None:
-        """Persist the graph to a JSON file.
-
-        Args:
-            path: File path to write the serialised graph to.
-        """
-        data = [belief.to_dict() for belief in self.beliefs.values()]
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-
-    def load(self, path: pathlib.Path) -> None:
-        """Load beliefs from a JSON file, replacing current state.
-
-        Each loaded belief is indexed into ``graph`` and ``domain_index``
-        without passing through ``add_belief`` validation, since the
-        data was previously validated on initial insertion.
-
-        Args:
-            path: File path to read from.
-
-        Raises:
-            FileNotFoundError: If *path* does not exist.
-        """
-        raw: list[dict[str, Any]] = json.loads(path.read_text(encoding="utf-8"))
-        self.beliefs.clear()
-        self.graph.clear()
-        self.domain_index.clear()
-        for item in raw:
-            belief = BeliefCertificate.from_dict(item)
-            self.beliefs[belief.claim] = belief
-            self._index_belief(belief)
 
     # ------------------------------------------------------------------
     # Dunder helpers

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -44,9 +45,13 @@ def _make_cert(
     )
 
 
-def _make_graph() -> KnowledgeGraph:
-    """Return an empty KnowledgeGraph."""
-    return KnowledgeGraph()
+def _make_graph(storage_path: str | None = None) -> KnowledgeGraph:
+    """Return an empty KnowledgeGraph with isolated storage."""
+    if storage_path is None:
+        storage_path = str(
+            Path(tempfile.gettempdir()) / f"nexus_test_{uuid.uuid4().hex}.json"
+        )
+    return KnowledgeGraph(storage_path=storage_path)
 
 
 # ---------------------------------------------------------------------------
@@ -392,31 +397,27 @@ class TestKnowledgeGraphHealthReport:
 # ---------------------------------------------------------------------------
 
 class TestKnowledgeGraphPersistence:
-    """Tests for save/load round-trip."""
+    """Tests for persistence round-trip via PersistenceManager."""
 
     def test_save_and_load(self) -> None:
-        graph = _make_graph()
-        graph.add_belief(_make_cert(claim="persist-me", domain="Persist"))
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "graph.json"
-            graph.save(path)
-            new_graph = _make_graph()
-            new_graph.load(path)
+            path = str(Path(tmp) / "beliefs.json")
+            graph = KnowledgeGraph(storage_path=path)
+            graph.add_belief(_make_cert(claim="persist-me", domain="Persist"))
+            new_graph = KnowledgeGraph(storage_path=path)
             assert "persist-me" in new_graph
             assert "Persist" in new_graph.domain_index
 
     def test_load_rebuilds_indexes(self) -> None:
-        graph = _make_graph()
-        graph.add_belief(_make_cert(
-            claim="parent",
-            downstream_dependents=["child"],
-            domain="Deps",
-        ))
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "graph.json"
-            graph.save(path)
-            loaded = _make_graph()
-            loaded.load(path)
+            path = str(Path(tmp) / "beliefs.json")
+            graph = KnowledgeGraph(storage_path=path)
+            graph.add_belief(_make_cert(
+                claim="parent",
+                downstream_dependents=["child"],
+                domain="Deps",
+            ))
+            loaded = KnowledgeGraph(storage_path=path)
             assert "parent" in loaded.graph.get("child", set())
             assert "Deps" in loaded.domain_index
 

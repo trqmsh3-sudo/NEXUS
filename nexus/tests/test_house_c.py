@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import tempfile
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -68,7 +70,10 @@ def _failed_report() -> DestructionReport:
 
 
 def _make_graph() -> KnowledgeGraph:
-    return KnowledgeGraph()
+    import uuid
+    from pathlib import Path
+    path = str(Path(tempfile.gettempdir()) / f"nexus_hc_{uuid.uuid4().hex}.json")
+    return KnowledgeGraph(storage_path=path)
 
 
 def _fake_response(content: str) -> MagicMock:

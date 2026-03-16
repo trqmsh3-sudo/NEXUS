@@ -1,0 +1,33 @@
+"""NEXUS core package — foundational data structures and engines."""
+
+from nexus.core.belief_certificate import BeliefCertificate
+from nexus.core.house_b import HouseB, MinorityReport, StructuredSpecificationObject
+from nexus.core.house_c import BuildArtifact, BuildResult, HouseC
+from nexus.core.house_d import (
+    AttackResult,
+    AttackType,
+    DestructionReport,
+    HouseD,
+)
+from nexus.core.house_omega import CycleResult, HouseOmega, SystemHealth
+from nexus.core.knowledge_graph import KnowledgeGraph
+from nexus.core.model_router import ModelRouter
+
+__all__: list[str] = [
+    "AttackResult",
+    "AttackType",
+    "BeliefCertificate",
+    "BuildArtifact",
+    "BuildResult",
+    "CycleResult",
+    "DestructionReport",
+    "HouseB",
+    "HouseC",
+    "HouseD",
+    "HouseOmega",
+    "KnowledgeGraph",
+    "ModelRouter",
+    "MinorityReport",
+    "StructuredSpecificationObject",
+    "SystemHealth",
+]

@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NEXUS — Intelligence That Evolves</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{background:#000;color:#00ff41;font-family:'Space Mono',monospace;overflow-x:hidden}
+
+/* ── HERO ── */
+.hero{position:relative;width:100%;height:100vh;display:flex;align-items:center;justify-content:center;overflow:hidden}
+#particle-canvas{position:absolute;top:0;left:0;width:100%;height:100%;z-index:0}
+.hero-content{position:relative;z-index:1;text-align:center;padding:0 1.5rem}
+.hero-title{font-family:'Syne',sans-serif;font-size:8rem;font-weight:800;color:#00ff41;line-height:1;text-shadow:0 0 40px rgba(0,255,65,.35),0 0 80px rgba(0,255,65,.15);letter-spacing:-.02em}
+.hero-subtitle{font-family:'Space Mono',monospace;font-size:1.1rem;color:rgba(0,255,65,.6);margin-top:1rem}
+.typing-wrapper{height:1.6rem;margin-top:1.4rem;font-family:'Space Mono',monospace;font-size:.95rem;color:rgba(0,255,65,.75)}
+.typing-wrapper .cursor{display:inline-block;width:2px;height:1.1em;background:#00ff41;vertical-align:text-bottom;animation:blink .6s step-end infinite}
+@keyframes blink{50%{opacity:0}}
+.cta{display:inline-block;margin-top:2.4rem;padding:.85rem 2.4rem;font-family:'Space Mono',monospace;font-size:1rem;color:#00ff41;background:transparent;border:1.5px solid #00ff41;border-radius:6px;text-decoration:none;transition:background .3s,color .3s,box-shadow .3s;cursor:pointer}
+.cta:hover{background:#00ff41;color:#000;box-shadow:0 0 30px rgba(0,255,65,.3)}
+
+/* ── SECTIONS COMMON ── */
+section{padding:6rem 2rem}
+
+/* ── HOUSES ── */
+.houses-title{font-family:'Syne',sans-serif;font-size:3rem;font-weight:800;text-align:center;margin-bottom:3.5rem}
+.houses-grid{display:flex;justify-content:center;gap:1.5rem;flex-wrap:wrap;max-width:1260px;margin:0 auto}
+.house-card{position:relative;width:220px;background:#0a0a0a;border:1px solid #003b00;border-radius:12px;padding:2rem;text-align:center;transition:border-color .4s,box-shadow .4s;overflow:hidden;z-index:0}
+.house-card::before{content:'';position:absolute;top:-50%;left:-50%;width:200%;height:200%;background:conic-gradient(from 0deg,transparent 0%,#00ff41 25%,transparent 50%);opacity:0;transition:opacity .5s;animation:none;z-index:-1}
+.house-card:hover{border-color:#00ff41;box-shadow:0 0 30px rgba(0,255,65,.15)}
+.house-card:hover::before{opacity:.12;animation:border-rotate 3s linear infinite}
+@keyframes border-rotate{to{transform:rotate(360deg)}}
+.house-icon{font-size:2.6rem;margin-bottom:.8rem}
+.house-name{font-family:'Syne',sans-serif;font-size:1.2rem;font-weight:700;margin-bottom:.2rem}
+.house-alias{font-size:.85rem;color:rgba(0,255,65,.5);margin-bottom:.7rem}
+.house-desc{font-size:.82rem;color:rgba(0,255,65,.6);line-height:1.5}
+
+/* ── STATS ── */
+.stats{display:flex;justify-content:center;gap:5rem;flex-wrap:wrap;max-width:900px;margin:0 auto}
+.stat{text-align:center}
+.stat-number{font-family:'Syne',sans-serif;font-size:4rem;font-weight:800;color:#00ff41;line-height:1.1}
+.stat-label{font-family:'Space Mono',monospace;font-size:.9rem;color:rgba(0,255,65,.5);margin-top:.4rem}
+
+/* ── FOOTER ── */
+footer{text-align:center;padding:3rem 1.5rem}
+footer p{font-family:'Space Mono',monospace;font-size:.85rem;color:rgba(0,255,65,.3)}
+
+/* ── RESPONSIVE ── */
+@media(max-width:768px){
+  .hero-title{font-size:4rem}
+  .hero-subtitle{font-size:.9rem}
+  .typing-wrapper{font-size:.8rem}
+  .houses-grid{flex-direction:column;align-items:center}
+  .house-card{width:90%;max-width:340px}
+  .stats{gap:3rem}
+  .stat-number{font-size:3rem}
+  .houses-title{font-size:2.2rem}
+}
+</style>
+</head>
+<body>
+
+<!-- HERO -->
+<section class="hero">
+  <canvas id="particle-canvas"></canvas>
+  <div class="hero-content">
+    <h1 class="hero-title">NEXUS</h1>
+    <p class="hero-subtitle">Intelligence that evolves. Knowledge that survives.</p>
+    <div class="typing-wrapper"><span id="typed-text"></span><span class="cursor"></span></div>
+    <a href="/dashboard" class="cta">Enter NEXUS →</a>
+  </div>
+</section>
+
+<!-- FIVE HOUSES -->
+<section id="houses">
+  <h2 class="houses-title">THE FIVE HOUSES</h2>
+  <div class="houses-grid">
+    <div class="house-card">
+      <div class="house-icon">🧠</div>
+      <div class="house-name">House A</div>
+      <div class="house-alias">The Memory</div>
+      <div class="house-desc">Executable knowledge that grows</div>
+    </div>
+    <div class="house-card">
+      <div class="house-icon">🔮</div>
+      <div class="house-name">House B</div>
+      <div class="house-alias">The Oracle</div>
+      <div class="house-desc">Redefines problems entirely</div>
+    </div>
+    <div class="house-card">
+      <div class="house-icon">🏗️</div>
+      <div class="house-name">House C</div>
+      <div class="house-alias">The Builder</div>
+      <div class="house-desc">Real code, real systems</div>
+    </div>
+    <div class="house-card">
+      <div class="house-icon">💀</div>
+      <div class="house-name">House D</div>
+      <div class="house-alias">The Destroyer</div>
+      <div class="house-desc">Kills weak ideas before they spread</div>
+    </div>
+    <div class="house-card">
+      <div class="house-icon">👁️</div>
+      <div class="house-name">House Ω</div>
+      <div class="house-alias">The Governor</div>
+      <div class="house-desc">Controls the evolution</div>
+    </div>
+  </div>
+</section>
+
+<!-- STATS -->
+<section id="stats">
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-number" data-target="146">0</div>
+      <div class="stat-label">Tests Passing</div>
+    </div>
+    <div class="stat">
+      <div class="stat-number" data-target="5">0</div>
+      <div class="stat-label">Verified Beliefs</div>
+    </div>
+    <div class="stat">
+      <div class="stat-number" data-target="inf" style="opacity:0;transition:opacity 1.2s">∞</div>
+      <div class="stat-label">Self-Improving</div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <p>NEXUS — Not a product. An evolution.</p>
+</footer>
+
+<script>
+(function(){
+
+  /* ── PARTICLE NETWORK ── */
+  const canvas = document.getElementById('particle-canvas');
+  const ctx = canvas.getContext('2d');
+  let particles = [];
+  const PARTICLE_COUNT = 80;
+  const CONNECT_DIST = 120;
+
+  function resize(){
+    canvas.width = canvas.offsetWidth * devicePixelRatio;
+    canvas.height = canvas.offsetHeight * devicePixelRatio;
+    ctx.scale(devicePixelRatio, devicePixelRatio);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function createParticle(){
+    return {
+      x: Math.random() * canvas.offsetWidth,
+      y: Math.random() * canvas.offsetHeight,
+      vx: (Math.random() - .5) * .4,
+      vy: (Math.random() - .5) * .4,
+      r: Math.random() * 1.8 + .8
+    };
+  }
+  for(let i = 0; i < PARTICLE_COUNT; i++) particles.push(createParticle());
+
+  function drawParticles(){
+    const w = canvas.offsetWidth, h = canvas.offsetHeight;
+    ctx.clearRect(0, 0, w, h);
+
+    for(let i = 0; i < particles.length; i++){
+      const p = particles[i];
+      p.x += p.vx; p.y += p.vy;
+      if(p.x < 0) p.x = w;
+      if(p.x > w) p.x = 0;
+      if(p.y < 0) p.y = h;
+      if(p.y > h) p.y = 0;
+
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fillStyle = '#00ff41';
+      ctx.fill();
+
+      for(let j = i + 1; j < particles.length; j++){
+        const q = particles[j];
+        const dx = p.x - q.x, dy = p.y - q.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if(dist < CONNECT_DIST){
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y);
+          ctx.lineTo(q.x, q.y);
+          ctx.strokeStyle = 'rgba(0,255,65,' + (1 - dist / CONNECT_DIST) * .35 + ')';
+          ctx.lineWidth = .6;
+          ctx.stroke();
+        }
+      }
+    }
+    requestAnimationFrame(drawParticles);
+  }
+  requestAnimationFrame(drawParticles);
+
+  /* ── TYPING ANIMATION ── */
+  const phrases = [
+    'Redefining problems humans didn\'t know they had...',
+    'Destroying weak ideas before they become weak code...',
+    'Building what 20 engineers build in months \u2014 in hours...'
+  ];
+  const typedEl = document.getElementById('typed-text');
+  let phraseIdx = 0, charIdx = 0, deleting = false, pauseTimer = 0;
+
+  function typeLoop(){
+    const current = phrases[phraseIdx];
+    if(!deleting){
+      typedEl.textContent = current.slice(0, charIdx + 1);
+      charIdx++;
+      if(charIdx >= current.length){
+        pauseTimer = setTimeout(function(){ deleting = true; typeLoop(); }, 1800);
+        return;
+      }
+      pauseTimer = setTimeout(typeLoop, 45);
+    } else {
+      typedEl.textContent = current.slice(0, charIdx);
+      charIdx--;
+      if(charIdx < 0){
+        deleting = false;
+        charIdx = 0;
+        phraseIdx = (phraseIdx + 1) % phrases.length;
+        pauseTimer = setTimeout(typeLoop, 400);
+        return;
+      }
+      pauseTimer = setTimeout(typeLoop, 25);
+    }
+  }
+  typeLoop();
+
+  /* ── STATS COUNT-UP ── */
+  const statNumbers = document.querySelectorAll('.stat-number');
+  const observer = new IntersectionObserver(function(entries){
+    entries.forEach(function(entry){
+      if(!entry.isIntersecting) return;
+      const el = entry.target;
+      observer.unobserve(el);
+      const target = el.getAttribute('data-target');
+      if(target === 'inf'){
+        el.style.opacity = '1';
+        return;
+      }
+      const end = parseInt(target, 10);
+      const duration = 1600;
+      const start = performance.now();
+      function tick(now){
+        const elapsed = now - start;
+        const progress = Math.min(elapsed / duration, 1);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        el.textContent = Math.round(eased * end);
+        if(progress < 1) requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    });
+  }, { threshold: .3 });
+  statNumbers.forEach(function(el){ observer.observe(el); });
+
+})();
+</script>
+</body>
+</html>

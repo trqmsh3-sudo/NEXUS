@@ -1,0 +1,868 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NEXUS — Mission Control</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #000000;
+  --primary: #00ff41;
+  --sidebar-bg: #001a00;
+  --card-bg: #0a0a0a;
+  --border: #003b00;
+  --font-heading: 'Syne', sans-serif;
+  --font-mono: 'Space Mono', monospace;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--primary);
+  font-family: var(--font-mono);
+  overflow: hidden;
+}
+
+/* ─── SIDEBAR ─── */
+.sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 260px;
+  height: 100%;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  z-index: 100;
+  transition: transform 0.3s ease;
+}
+
+.sidebar-logo {
+  padding: 1.5rem;
+  font-family: var(--font-heading);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--primary);
+  letter-spacing: 0.1em;
+}
+
+.sidebar-nav {
+  list-style: none;
+  flex: 1;
+}
+
+.sidebar-nav li {
+  display: block;
+}
+
+.sidebar-nav a {
+  display: block;
+  padding: 0.8rem 1.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: rgba(0, 255, 65, 0.6);
+  text-decoration: none;
+  border-left: 2px solid transparent;
+  transition: all 0.2s ease;
+}
+
+.sidebar-nav a:hover,
+.sidebar-nav a.active {
+  color: var(--primary);
+  background: rgba(0, 255, 65, 0.05);
+  border-left: 2px solid var(--primary);
+}
+
+.sidebar-uptime {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  padding: 1.2rem 1.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-uptime .label {
+  font-size: 0.65rem;
+  letter-spacing: 0.15em;
+  opacity: 0.4;
+  margin-bottom: 0.3rem;
+}
+
+.sidebar-uptime .timer {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--primary);
+}
+
+/* ─── TOP BAR ─── */
+.topbar {
+  position: fixed;
+  top: 0;
+  left: 260px;
+  right: 0;
+  height: 60px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2rem;
+  z-index: 90;
+}
+
+.topbar-logo {
+  font-family: var(--font-heading);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--primary);
+  letter-spacing: 0.15em;
+  opacity: 0.6;
+}
+
+.topbar-status {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  opacity: 0.8;
+}
+
+.pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--primary);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 4px var(--primary); }
+  50% { opacity: 0.3; box-shadow: 0 0 12px var(--primary); }
+}
+
+/* ─── MAIN CONTENT ─── */
+.main {
+  margin-left: 260px;
+  margin-top: 60px;
+  height: calc(100vh - 60px);
+  padding: 2rem;
+  overflow-y: auto;
+}
+
+.view { display: none; }
+.view.active { display: block; }
+
+/* ─── VIEW 1: RUN CYCLE ─── */
+.run-textarea {
+  width: 100%;
+  height: 120px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--primary);
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  padding: 1rem;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.run-textarea:focus {
+  border-color: var(--primary);
+}
+
+.run-textarea::placeholder {
+  color: rgba(0, 255, 65, 0.3);
+}
+
+.run-btn {
+  display: block;
+  width: 100%;
+  margin-top: 1rem;
+  padding: 1rem;
+  background: var(--primary);
+  color: #000;
+  font-family: var(--font-heading);
+  font-size: 1.1rem;
+  font-weight: 700;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  letter-spacing: 0.05em;
+  transition: box-shadow 0.2s, opacity 0.2s;
+}
+
+.run-btn:hover:not(:disabled) {
+  box-shadow: 0 0 20px rgba(0, 255, 65, 0.4), 0 0 60px rgba(0, 255, 65, 0.15);
+}
+
+.run-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ─── PIPELINE ─── */
+.pipeline {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  margin: 2rem 0;
+  flex-wrap: wrap;
+}
+
+.pipe-step {
+  padding: 0.7rem 1.2rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.75rem;
+  color: #333;
+  text-align: center;
+  min-width: 90px;
+  transition: all 0.4s ease;
+  background: var(--bg);
+}
+
+.pipe-step.lit {
+  border-color: var(--primary);
+  color: var(--primary);
+  box-shadow: 0 0 12px rgba(0, 255, 65, 0.2), inset 0 0 12px rgba(0, 255, 65, 0.05);
+}
+
+.pipe-arrow {
+  color: #333;
+  font-size: 1.2rem;
+  padding: 0 0.4rem;
+  transition: color 0.4s ease;
+}
+
+.pipe-arrow.lit {
+  color: var(--primary);
+}
+
+/* ─── RESULTS ─── */
+#results {
+  margin-top: 2rem;
+}
+
+.result-section {
+  margin-bottom: 1.5rem;
+}
+
+.result-section h3 {
+  font-family: var(--font-heading);
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: 0.6rem;
+  opacity: 0.8;
+}
+
+.terminal-box {
+  background: var(--card-bg);
+  border-left: 3px solid var(--primary);
+  padding: 1rem;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  line-height: 1.6;
+  border-radius: 0 6px 6px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.25rem 0.8rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+
+.badge-green { background: rgba(0,255,65,0.15); color: var(--primary); }
+.badge-red { background: rgba(255,65,65,0.15); color: #ff4141; }
+
+.big-result {
+  font-family: var(--font-heading);
+  font-size: 1.4rem;
+  font-weight: 800;
+  margin: 0.5rem 0;
+}
+
+.big-result.success { color: var(--primary); }
+.big-result.fail { color: #ff4141; }
+
+/* ─── VIEW 2: KNOWLEDGE GRAPH ─── */
+.beliefs-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+
+.belief-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.2rem;
+}
+
+.belief-claim {
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin-bottom: 0.8rem;
+}
+
+.confidence-track {
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  margin-bottom: 0.8rem;
+  overflow: hidden;
+}
+
+.confidence-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.6s ease;
+}
+
+.domain-badge {
+  display: inline-block;
+  background: var(--border);
+  color: var(--primary);
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-right: 0.5rem;
+}
+
+.belief-source {
+  font-size: 0.75rem;
+  opacity: 0.4;
+  margin-top: 0.5rem;
+}
+
+/* ─── VIEW 3: SYSTEM HEALTH ─── */
+.health-ring-container {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 2rem;
+}
+
+.health-ring {
+  position: relative;
+  width: 200px;
+  height: 200px;
+}
+
+.health-ring svg {
+  width: 200px;
+  height: 200px;
+  transform: rotate(-90deg);
+}
+
+.health-ring .ring-bg {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 10;
+}
+
+.health-ring .ring-fg {
+  fill: none;
+  stroke: var(--primary);
+  stroke-width: 10;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 1s ease;
+}
+
+.health-ring-label {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+}
+
+.health-ring-label .pct {
+  font-family: var(--font-heading);
+  font-size: 2.2rem;
+  font-weight: 800;
+}
+
+.health-ring-label .sub {
+  font-size: 0.7rem;
+  opacity: 0.5;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  max-width: 600px;
+  margin: 0 auto 2rem;
+}
+
+.stat-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.5rem;
+  text-align: center;
+}
+
+.stat-card .stat-num {
+  font-family: var(--font-heading);
+  font-size: 2rem;
+  font-weight: 800;
+}
+
+.stat-card .stat-label {
+  font-size: 0.75rem;
+  opacity: 0.5;
+  margin-top: 0.3rem;
+}
+
+.avg-cycle {
+  text-align: center;
+  font-size: 0.85rem;
+  opacity: 0.6;
+}
+
+/* ─── VIEW 4: CYCLE HISTORY ─── */
+.timeline {
+  max-width: 700px;
+}
+
+.timeline-entry {
+  background: var(--card-bg);
+  border-radius: 8px;
+  padding: 1.2rem;
+  margin-bottom: 1rem;
+  border-left: 3px solid var(--border);
+}
+
+.timeline-entry.success { border-left-color: var(--primary); }
+.timeline-entry.failed { border-left-color: #ff4141; }
+
+.timeline-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.75rem;
+  opacity: 0.5;
+}
+
+.timeline-input {
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin-bottom: 0.6rem;
+}
+
+.timeline-refinements {
+  font-size: 0.75rem;
+  opacity: 0.5;
+  margin-top: 0.4rem;
+}
+
+/* ─── EMPTY STATE ─── */
+.empty-state {
+  text-align: center;
+  padding: 4rem 2rem;
+  opacity: 0.3;
+  font-size: 0.9rem;
+}
+
+/* ─── ERROR TOAST ─── */
+.toast {
+  position: fixed;
+  bottom: 2rem;
+  right: 2rem;
+  background: #1a0000;
+  border: 1px solid #ff4141;
+  color: #ff4141;
+  padding: 1rem 1.5rem;
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  z-index: 999;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: all 0.3s ease;
+  pointer-events: none;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+/* ─── SCROLLBAR ─── */
+.main::-webkit-scrollbar { width: 6px; }
+.main::-webkit-scrollbar-track { background: var(--bg); }
+.main::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.main::-webkit-scrollbar-thumb:hover { background: var(--primary); }
+
+/* ─── RESPONSIVE ─── */
+@media (max-width: 900px) {
+  .sidebar { transform: translateX(-100%); }
+  .topbar { left: 0; }
+  .main { margin-left: 0; }
+  .beliefs-grid { grid-template-columns: 1fr; }
+  .stat-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 600px) {
+  .pipeline { flex-direction: column; }
+  .pipe-arrow { transform: rotate(90deg); }
+}
+</style>
+</head>
+<body>
+
+<!-- SIDEBAR -->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-logo">NEXUS</div>
+  <ul class="sidebar-nav" id="nav">
+    <li><a href="#" data-view="view-run" class="active">▶ Run Cycle</a></li>
+    <li><a href="#" data-view="view-beliefs" >◉ Knowledge Graph</a></li>
+    <li><a href="#" data-view="view-health" >♥ System Health</a></li>
+    <li><a href="#" data-view="view-cycles" >◷ Cycle History</a></li>
+  </ul>
+  <div class="sidebar-uptime">
+    <div class="label">SYSTEM UPTIME</div>
+    <div class="timer" id="uptime">00:00:00</div>
+  </div>
+</aside>
+
+<!-- TOP BAR -->
+<header class="topbar">
+  <div class="topbar-logo">NEXUS</div>
+  <div class="topbar-status">
+    <span class="pulse-dot"></span>
+    SYSTEM ALIVE
+  </div>
+</header>
+
+<!-- MAIN CONTENT -->
+<main class="main">
+
+  <!-- VIEW 1: RUN CYCLE -->
+  <section class="view active" id="view-run">
+    <textarea class="run-textarea" id="userInput" placeholder="Describe your problem. NEXUS will redefine it."></textarea>
+    <button class="run-btn" id="runBtn" onclick="runCycle()">RUN NEXUS ▶</button>
+
+    <div class="pipeline" id="pipeline">
+      <div class="pipe-step" data-step="0">INPUT</div>
+      <span class="pipe-arrow">→</span>
+      <div class="pipe-step" data-step="1">HOUSE B</div>
+      <span class="pipe-arrow">→</span>
+      <div class="pipe-step" data-step="2">HOUSE D</div>
+      <span class="pipe-arrow">→</span>
+      <div class="pipe-step" data-step="3">HOUSE C</div>
+      <span class="pipe-arrow">→</span>
+      <div class="pipe-step" data-step="4">HOUSE D</div>
+      <span class="pipe-arrow">→</span>
+      <div class="pipe-step" data-step="5">HOUSE A</div>
+    </div>
+
+    <div id="results" style="display:none;"></div>
+  </section>
+
+  <!-- VIEW 2: KNOWLEDGE GRAPH -->
+  <section class="view" id="view-beliefs">
+    <div id="beliefs-container"></div>
+  </section>
+
+  <!-- VIEW 3: SYSTEM HEALTH -->
+  <section class="view" id="view-health">
+    <div id="health-container"></div>
+  </section>
+
+  <!-- VIEW 4: CYCLE HISTORY -->
+  <section class="view" id="view-cycles">
+    <div id="cycles-container"></div>
+  </section>
+
+</main>
+
+<!-- ERROR TOAST -->
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+
+  /* ── NAVIGATION ── */
+  var navLinks = document.querySelectorAll('#nav a');
+  var views = document.querySelectorAll('.view');
+
+  navLinks.forEach(function (link) {
+    link.addEventListener('click', function (e) {
+      e.preventDefault();
+      navLinks.forEach(function (l) { l.classList.remove('active'); });
+      link.classList.add('active');
+
+      var target = link.getAttribute('data-view');
+      views.forEach(function (v) { v.classList.remove('active'); });
+      document.getElementById(target).classList.add('active');
+
+      if (target === 'view-beliefs') loadBeliefs();
+      if (target === 'view-health') loadHealth();
+      if (target === 'view-cycles') loadCycles();
+    });
+  });
+
+  /* ── UPTIME COUNTER ── */
+  var uptimeSeconds = 0;
+  var uptimeEl = document.getElementById('uptime');
+
+  setInterval(function () {
+    uptimeSeconds++;
+    var h = String(Math.floor(uptimeSeconds / 3600)).padStart(2, '0');
+    var m = String(Math.floor((uptimeSeconds % 3600) / 60)).padStart(2, '0');
+    var s = String(uptimeSeconds % 60).padStart(2, '0');
+    uptimeEl.textContent = h + ':' + m + ':' + s;
+  }, 1000);
+
+  /* ── TOAST ── */
+  var toastTimeout;
+  function showToast(msg) {
+    var el = document.getElementById('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(toastTimeout);
+    toastTimeout = setTimeout(function () { el.classList.remove('show'); }, 4000);
+  }
+
+  /* ── PIPELINE ANIMATION ── */
+  function resetPipeline() {
+    document.querySelectorAll('.pipe-step').forEach(function (s) { s.classList.remove('lit'); });
+    document.querySelectorAll('.pipe-arrow').forEach(function (a) { a.classList.remove('lit'); });
+  }
+
+  function animatePipeline() {
+    resetPipeline();
+    var steps = document.querySelectorAll('.pipe-step');
+    var arrows = document.querySelectorAll('.pipe-arrow');
+
+    steps.forEach(function (step, i) {
+      setTimeout(function () {
+        step.classList.add('lit');
+        if (i > 0 && arrows[i - 1]) arrows[i - 1].classList.add('lit');
+      }, i * 500);
+    });
+  }
+
+  /* ── RUN CYCLE ── */
+  window.runCycle = function () {
+    var input = document.getElementById('userInput').value.trim();
+    if (!input) { showToast('Enter a problem description.'); return; }
+
+    var btn = document.getElementById('runBtn');
+    btn.textContent = 'PROCESSING...';
+    btn.disabled = true;
+    document.getElementById('results').style.display = 'none';
+
+    animatePipeline();
+
+    fetch('/api/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_input: input })
+    })
+    .then(function (res) {
+      if (!res.ok) throw new Error('Server responded ' + res.status);
+      return res.json();
+    })
+    .then(function (data) {
+      renderResults(data);
+    })
+    .catch(function (err) {
+      showToast('Cycle failed: ' + err.message);
+    })
+    .finally(function () {
+      btn.textContent = 'RUN NEXUS ▶';
+      btn.disabled = false;
+    });
+  };
+
+  function renderResults(data) {
+    var html = '';
+
+    if (data.redefined_problem) {
+      html += '<div class="result-section">';
+      html += '<h3>House B — Redefined Problem</h3>';
+      html += '<div class="terminal-box">' + esc(data.redefined_problem) + '</div>';
+      html += '</div>';
+    }
+
+    if (data.verdict !== undefined) {
+      var survived = data.verdict === true || data.verdict === 'SURVIVED';
+      html += '<div class="result-section">';
+      html += '<h3>House D — Verdict</h3>';
+      html += '<span class="badge ' + (survived ? 'badge-green' : 'badge-red') + '">';
+      html += survived ? 'SURVIVED' : 'KILLED';
+      html += '</span>';
+      if (data.score !== undefined) html += ' <span style="opacity:0.5;font-size:0.8rem;">score: ' + data.score + '</span>';
+      html += '</div>';
+    }
+
+    if (data.build_success !== undefined) {
+      html += '<div class="result-section">';
+      html += '<h3>House C — Build</h3>';
+      html += '<span class="badge ' + (data.build_success ? 'badge-green' : 'badge-red') + '">';
+      html += data.build_success ? 'SUCCESS' : 'FAILED';
+      html += '</span>';
+      html += '</div>';
+    }
+
+    if (data.belief_added !== undefined) {
+      if (data.belief_added) {
+        html += '<div class="result-section"><div class="big-result success">BELIEF ADDED</div></div>';
+      } else {
+        html += '<div class="result-section"><div class="big-result fail">' + esc(data.failure_reason || 'BELIEF REJECTED') + '</div></div>';
+      }
+    }
+
+    if (data.refinement_attempts && data.refinement_attempts > 0) {
+      html += '<div class="result-section" style="opacity:0.5;font-size:0.85rem;">Refinement attempts: ' + data.refinement_attempts + '</div>';
+    }
+
+    var container = document.getElementById('results');
+    container.innerHTML = html;
+    container.style.display = 'block';
+  }
+
+  /* ── KNOWLEDGE GRAPH ── */
+  function loadBeliefs() {
+    var container = document.getElementById('beliefs-container');
+    container.innerHTML = '<div class="empty-state">Loading beliefs…</div>';
+
+    fetch('/api/beliefs')
+      .then(function (res) { if (!res.ok) throw new Error(res.status); return res.json(); })
+      .then(function (beliefs) {
+        if (!beliefs.length) {
+          container.innerHTML = '<div class="empty-state">No beliefs in the knowledge graph yet.</div>';
+          return;
+        }
+        var html = '<div class="beliefs-grid">';
+        beliefs.forEach(function (b) {
+          var conf = (b.confidence || 0);
+          var pct = Math.round(conf * 100);
+          var color = conf > 0.8 ? '#00ff41' : (conf >= 0.5 ? '#ffaa00' : '#ff4141');
+          html += '<div class="belief-card">';
+          html += '<div class="belief-claim">' + esc(b.claim || b.text || '') + '</div>';
+          html += '<div class="confidence-track"><div class="confidence-fill" style="width:' + pct + '%;background:' + color + ';"></div></div>';
+          if (b.domain) html += '<span class="domain-badge">' + esc(b.domain) + '</span>';
+          if (b.source) html += '<div class="belief-source">' + esc(b.source) + '</div>';
+          html += '</div>';
+        });
+        html += '</div>';
+        container.innerHTML = html;
+      })
+      .catch(function (err) {
+        container.innerHTML = '<div class="empty-state">Failed to load beliefs.</div>';
+        showToast('Beliefs: ' + err.message);
+      });
+  }
+
+  /* ── SYSTEM HEALTH ── */
+  function loadHealth() {
+    var container = document.getElementById('health-container');
+    container.innerHTML = '<div class="empty-state">Loading health data…</div>';
+
+    fetch('/api/health')
+      .then(function (res) { if (!res.ok) throw new Error(res.status); return res.json(); })
+      .then(function (d) {
+        var score = d.system_score || 0;
+        var pct = Math.round(score * 100);
+        var circ = 2 * Math.PI * 85;
+        var offset = circ - (circ * score);
+
+        var html = '<div class="health-ring-container"><div class="health-ring">';
+        html += '<svg viewBox="0 0 200 200">';
+        html += '<circle class="ring-bg" cx="100" cy="100" r="85"/>';
+        html += '<circle class="ring-fg" cx="100" cy="100" r="85" stroke-dasharray="' + circ.toFixed(1) + '" stroke-dashoffset="' + offset.toFixed(1) + '"/>';
+        html += '</svg>';
+        html += '<div class="health-ring-label"><div class="pct">' + pct + '%</div><div class="sub">SYSTEM SCORE</div></div>';
+        html += '</div></div>';
+
+        html += '<div class="stat-grid">';
+        html += statCard(d.total_cycles || 0, 'Total Cycles');
+        html += statCard((d.success_rate !== undefined ? Math.round(d.success_rate * 100) + '%' : '—'), 'Success Rate');
+        html += statCard(d.total_beliefs || 0, 'Total Beliefs');
+        html += statCard(d.domains_covered || 0, 'Domains Covered');
+        html += '</div>';
+
+        if (d.avg_cycle_time !== undefined) {
+          html += '<div class="avg-cycle">Average cycle time: ' + d.avg_cycle_time.toFixed(2) + 's</div>';
+        }
+
+        container.innerHTML = html;
+      })
+      .catch(function (err) {
+        container.innerHTML = '<div class="empty-state">Failed to load health data.</div>';
+        showToast('Health: ' + err.message);
+      });
+  }
+
+  function statCard(num, label) {
+    return '<div class="stat-card"><div class="stat-num">' + num + '</div><div class="stat-label">' + label + '</div></div>';
+  }
+
+  /* ── CYCLE HISTORY ── */
+  function loadCycles() {
+    var container = document.getElementById('cycles-container');
+    container.innerHTML = '<div class="empty-state">Loading cycle history…</div>';
+
+    fetch('/api/cycles')
+      .then(function (res) { if (!res.ok) throw new Error(res.status); return res.json(); })
+      .then(function (cycles) {
+        if (!cycles.length) {
+          container.innerHTML = '<div class="empty-state">No cycles recorded yet.</div>';
+          return;
+        }
+        var html = '<div class="timeline">';
+        cycles.forEach(function (c) {
+          var ok = c.success || c.status === 'SUCCESS';
+          html += '<div class="timeline-entry ' + (ok ? 'success' : 'failed') + '">';
+          html += '<div class="timeline-meta">';
+          html += '<span>' + esc((c.id || c.cycle_id || '').substring(0, 8)) + '</span>';
+          if (c.timestamp) html += '<span>' + esc(c.timestamp) + '</span>';
+          html += '</div>';
+          html += '<div class="timeline-input">' + esc((c.user_input || '').substring(0, 80)) + '</div>';
+          html += '<span class="badge ' + (ok ? 'badge-green' : 'badge-red') + '">' + (ok ? 'SUCCESS' : 'FAILED') + '</span>';
+          if (c.refinement_attempts && c.refinement_attempts > 0) {
+            html += '<div class="timeline-refinements">Refinement attempts: ' + c.refinement_attempts + '</div>';
+          }
+          html += '</div>';
+        });
+        html += '</div>';
+        container.innerHTML = html;
+      })
+      .catch(function (err) {
+        container.innerHTML = '<div class="empty-state">Failed to load cycle history.</div>';
+        showToast('Cycles: ' + err.message);
+      });
+  }
+
+  /* ── UTIL ── */
+  function esc(str) {
+    var d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+  }
+
+})();
+</script>
+</body>
+</html>

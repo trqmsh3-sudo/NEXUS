@@ -13,6 +13,7 @@ from __future__ import annotations
 import enum
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -467,7 +468,9 @@ class HouseD:
         )
 
     def _parse_json(self, raw: str, label: str) -> dict[str, Any]:
-        """Parse a JSON string with one retry on failure.
+        """Parse a JSON string with resilient fallbacks for truncated output.
+
+        Handles markdown fences, extracted JSON objects, and truncated JSON.
 
         Args:
             raw: The raw string that should be valid JSON.
@@ -477,32 +480,35 @@ class HouseD:
             The parsed dictionary.
 
         Raises:
-            ValueError: If parsing fails after the retry.
+            ValueError: If parsing fails after all repair attempts.
         """
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError as first_err:
-            logger.warning(
-                "JSON parse failed [%s] (attempt 1): %s  raw=%r",
-                label, first_err, raw[:200],
-            )
-
-        stripped = raw.strip()
-        for prefix in ("```json", "```"):
-            if stripped.startswith(prefix):
-                stripped = stripped[len(prefix):]
-        if stripped.endswith("```"):
-            stripped = stripped[:-3]
-        stripped = stripped.strip()
+        text = re.sub(r"```json|```", "", raw).strip()
 
         try:
-            return json.loads(stripped)
-        except json.JSONDecodeError as second_err:
-            logger.error(
-                "JSON parse failed [%s] (attempt 2, giving up): %s",
-                label, second_err,
-            )
-            raise ValueError(
-                f"House D LLM returned invalid JSON for '{label}' after "
-                f"{_MAX_RETRIES} retry. Raw output: {raw[:300]}"
-            ) from second_err
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        try:
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            if start >= 0 and end > start:
+                return json.loads(text[start:end])
+        except json.JSONDecodeError:
+            pass
+
+        try:
+            open_braces = text.count("{") - text.count("}")
+            open_brackets = text.count("[") - text.count("]")
+            repaired = text.rstrip()
+            if repaired.endswith(","):
+                repaired = repaired[:-1]
+            repaired += "]" * max(0, open_brackets)
+            repaired += "}" * max(0, open_braces)
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            pass
+
+        raise ValueError(
+            f"House D returned invalid JSON for '{label}' after all attempts. Raw: {raw[:300]}"
+        )

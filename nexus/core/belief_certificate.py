@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from nexus.core.text_utils import clean_text
+
 
 @dataclass
 class BeliefCertificate:
@@ -97,17 +99,24 @@ class BeliefCertificate:
         Returns:
             A dictionary containing all certificate fields.
         """
+        def _clean(val: Any) -> Any:
+            if isinstance(val, str):
+                return clean_text(val)
+            if isinstance(val, list):
+                return [_clean(v) for v in val]
+            return val
+
         return {
-            "claim": self.claim,
-            "source": self.source,
+            "claim": _clean(self.claim),
+            "source": _clean(self.source),
             "confidence": self.confidence,
-            "contradictions": list(self.contradictions),
+            "contradictions": _clean(list(self.contradictions)),
             "decay_rate": self.decay_rate,
             "created_at": self.created_at.isoformat(),
             "last_verified": self.last_verified.isoformat(),
-            "downstream_dependents": list(self.downstream_dependents),
-            "executable_proof": self.executable_proof,
-            "domain": self.domain,
+            "downstream_dependents": _clean(list(self.downstream_dependents)),
+            "executable_proof": _clean(self.executable_proof) if self.executable_proof else None,
+            "domain": _clean(self.domain),
         }
 
     @classmethod
@@ -128,16 +137,16 @@ class BeliefCertificate:
             ValueError: If field values are out of range.
         """
         return cls(
-            claim=data["claim"],
-            source=data["source"],
+            claim=clean_text(data["claim"]),
+            source=clean_text(data["source"]),
             confidence=data["confidence"],
-            contradictions=data.get("contradictions", []),
+            contradictions=[clean_text(c) for c in data.get("contradictions", [])],
             decay_rate=data.get("decay_rate", 0.0),
             created_at=datetime.fromisoformat(data["created_at"]),
             last_verified=datetime.fromisoformat(data["last_verified"]),
-            downstream_dependents=data.get("downstream_dependents", []),
-            executable_proof=data.get("executable_proof"),
-            domain=data.get("domain", "General"),
+            downstream_dependents=[clean_text(d) for d in data.get("downstream_dependents", [])],
+            executable_proof=clean_text(data["executable_proof"]) if data.get("executable_proof") else None,
+            domain=clean_text(data.get("domain", "General")),
         )
 
     def __repr__(self) -> str:

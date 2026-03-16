@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+litellm
+mistralai
+groq
+google-generativeai
+python-dotenv
+requests
+httpx
+pytest

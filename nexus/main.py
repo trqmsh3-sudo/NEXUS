@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import io
 import logging
 import sys
 from pathlib import Path
+
+# Ensure UTF-8 output on Windows
+if hasattr(sys.stdout, "buffer"):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+if hasattr(sys.stderr, "buffer"):
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
 
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 from nexus.core.belief_certificate import BeliefCertificate  # noqa: E402
+from nexus.core.text_utils import clean_text
 from nexus.core.house_b import HouseB
 from nexus.core.house_c import HouseC
 from nexus.core.house_d import HouseD
@@ -154,7 +162,8 @@ def _print_cycle_result(i: int, result: CycleResult) -> None:
     if result.belief_added:
         print(f"  >> BELIEF ADDED TO HOUSE A")
     elif result.failure_reason:
-        print(f"  Reason:    {result.failure_reason}")
+        from nexus.core.text_utils import clean_text
+        print(f"  Reason:    {clean_text(result.failure_reason)}")
 
     print()
 
@@ -180,13 +189,18 @@ def _print_health(health: SystemHealth) -> None:
 # run_demo
 # ------------------------------------------------------------------
 
-def run_demo(nexus: HouseOmega) -> None:
-    """Run the NEXUS demo with three sample cycles.
+def run_demo(
+    nexus: HouseOmega,
+    inputs: list[str] | None = None,
+) -> None:
+    """Run the NEXUS demo with sample cycles.
 
     Args:
         nexus: A fully initialised HouseOmega instance.
+        inputs: Optional list of user inputs. If None, uses default 3-cycle demo.
     """
-    inputs = [
+    if inputs is None:
+        inputs = [
         "Build a Python function called validate_email that takes a "
         "string and returns True if it is a valid email address and "
         "False otherwise. Must handle plus-addressing like user+tag@domain.com "
@@ -234,6 +248,9 @@ def run_demo(nexus: HouseOmega) -> None:
 def main() -> int:
     """Boot NEXUS and run the demo.
 
+    If command-line args are provided, runs a single cycle with that input.
+    Otherwise runs the default 3-cycle demo.
+
     Returns:
         Exit code (0 for success).
     """
@@ -242,13 +259,34 @@ def main() -> int:
     print("  Booting NEXUS...")
     nexus = build_nexus()
 
-    run_demo(nexus)
+    if len(sys.argv) > 1:
+        user_input = " ".join(sys.argv[1:])
+        _print_separator("SINGLE CYCLE")
+        print(f"\n  >>> Input: \"{user_input}\"")
+        result = nexus.run(user_input)
+        _print_cycle_result(1, result)
+        _print_health(nexus.get_health())
+        _print_separator("KNOWLEDGE GRAPH - FINAL STATE")
+        if len(nexus.knowledge_graph) == 0:
+            print("  (empty)")
+        else:
+            for belief in nexus.knowledge_graph:
+                valid = "valid" if belief.is_valid() else "invalid"
+                print(f"  [{belief.domain}] {belief.claim}")
+                print(f"    confidence={belief.confidence}  {valid}  source={belief.source}")
+        print()
+    else:
+        run_demo(nexus)
 
     _print_separator("FINAL HEALTH REPORT")
     health = nexus.get_health()
     print(f"  Score:   {health.system_score:.2%}")
     print(f"  Cycles:  {health.total_cycles}")
     print(f"  Beliefs: {health.total_beliefs}")
+    beliefs_added = sum(1 for c in nexus.cycle_history if c.belief_added)
+    print(f"  Beliefs added this run: {beliefs_added}")
+    total_time = sum(c.cycle_time_seconds for c in nexus.cycle_history)
+    print(f"  Total cycle time: {total_time:.2f}s")
     print(f"  Domains: {', '.join(health.domains_covered) or '(none)'}")
     print()
 
@@ -257,6 +295,14 @@ def main() -> int:
                  if b.is_valid() and not b.is_expired()])
     print(f"  Saved to disk: {saved} beliefs")
     print()
+
+    router = nexus.house_b.router
+    if router.call_log:
+        _print_separator("MODEL USAGE (per House call)")
+        for i, (house, model, elapsed, ok) in enumerate(router.call_log, 1):
+            status = "ok" if ok else "FAILED"
+            print(f"  {i}. {house}  ->  {model}  ({elapsed}s)  [{status}]")
+        print()
 
     print("  NEXUS shutdown complete.")
     return 0

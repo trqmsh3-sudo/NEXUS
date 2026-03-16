@@ -1,40 +1,64 @@
-"""Model Router — routes LLM calls to the best provider per House.
+"""Model Router — routes LLM calls via Mistral, Groq, and OpenRouter.
 
-Uses LiteLLM as the universal interface so any supported provider
-can be swapped in without changing calling code. Each House is
-assigned a preferred model. If the preferred model fails, the
-router falls back to a reliable default.
+Uses LiteLLM. Primary: Mistral (reliable, no encoding issues).
+Groq and OpenRouter free tier as fallback.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
 import litellm
 
+from nexus.core.text_utils import clean_text
+
 logger: logging.Logger = logging.getLogger(__name__)
 
 litellm.suppress_debug_info = True
 
+# Primary model — Mistral (proven to work, no encoding issues)
+PRIMARY_MODELS: list[str] = [
+    "mistral/mistral-large-latest",
+]
+
+# Per-house model assignments (Mistral only for reliability)
 HOUSE_MODELS: dict[str, str] = {
-    "house_b": "gemini/gemini-2.0-flash",
+    "house_b": "mistral/mistral-large-latest",
     "house_c": "mistral/mistral-large-latest",
     "house_d": "mistral/mistral-large-latest",
 }
 
 FALLBACK_MODEL: str = "mistral/mistral-large-latest"
 
+# Fallback models — Groq and OpenRouter (last resort)
+WORKING_FREE_MODELS: list[str] = [
+    "groq/llama-3.3-70b-versatile",
+    "openrouter/liquid/lfm-2.5-1.2b-instruct:free",
+    "openrouter/liquid/lfm-2.5-1.2b-thinking:free",
+    "openrouter/nvidia/nemotron-nano-9b-v2:free",
+    "openrouter/meta-llama/llama-3.2-3b-instruct:free",
+    "openrouter/meta-llama/llama-3.3-70b-instruct:free",
+    "openrouter/qwen/qwen3-coder:free",
+]
+
+OPENROUTER_HEADERS: dict[str, str] = {
+    "HTTP-Referer": "https://github.com/trqmsh3-sudo/NEXUS",
+    "X-Title": "NEXUS",
+}
+
+_MIN_RESPONSE_CHARS: int = 10
+
 
 @dataclass
 class ModelRouter:
     """Routes LLM calls through LiteLLM with per-House model selection.
 
-    Each House is assigned a preferred model via :data:`HOUSE_MODELS`.
-    If the preferred model raises an exception the router automatically
-    retries with :data:`FALLBACK_MODEL`.
+    If the preferred model fails or returns empty, the router tries
+    alternative models. Free models sometimes return empty strings.
 
     Attributes:
         call_log: History of (house, model_used, elapsed_s, ok) tuples.
@@ -49,9 +73,11 @@ class ModelRouter:
         system: str,
         user: str,
         label: str = "",
-        max_tokens: int = 4096,
+        max_tokens: int = 2000,
     ) -> str:
         """Send a chat completion through the best model for *house*.
+
+        Tries multiple models if the preferred one fails or returns empty.
 
         Args:
             house: House identifier (``"house_b"``, ``"house_c"``, etc.).
@@ -64,30 +90,42 @@ class ModelRouter:
             The raw text content from the LLM response.
 
         Raises:
-            Exception: If both the preferred model and the fallback fail.
+            ValueError: If all models failed or returned empty.
         """
         preferred = HOUSE_MODELS.get(house, FALLBACK_MODEL)
+        # Try primary (Groq/Mistral) first, then OpenRouter as last resort
+        primary = [preferred] + [m for m in PRIMARY_MODELS if m != preferred]
+        if FALLBACK_MODEL not in primary:
+            primary.append(FALLBACK_MODEL)
+        models_to_try: list[str] = primary + WORKING_FREE_MODELS
+        seen: set[str] = set()
+        models_to_try = [m for m in models_to_try if m and m not in seen and not seen.add(m)]
+
         messages: list[dict[str, str]] = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
+            {"role": "system", "content": clean_text(system)},
+            {"role": "user", "content": clean_text(user)},
         ]
 
-        content = self._try_model(preferred, messages, max_tokens, house, label)
-        if content is not None:
-            return content
-
-        if preferred != FALLBACK_MODEL:
-            logger.warning(
-                "ROUTER fallback  house=%s  from=%s  to=%s  label=%s",
-                house, preferred, FALLBACK_MODEL, label,
+        last_error: Exception | None = None
+        for model in models_to_try:
+            result = self._try_model(model, messages, max_tokens, house, label)
+            if result is None:
+                continue
+            text = result.strip()
+            if len(text) < _MIN_RESPONSE_CHARS:
+                logger.warning(
+                    "ROUTER empty  house=%s  model=%s  label=%s  chars=%d  trying next",
+                    house, model, label, len(text),
+                )
+                continue
+            logger.info(
+                "ROUTER ok  house=%s  model=%s  label=%s  chars=%d",
+                house, model, label, len(text),
             )
-            content = self._try_model(FALLBACK_MODEL, messages, max_tokens, house, label)
-            if content is not None:
-                return content
+            return text
 
-        raise RuntimeError(
-            f"All models failed for {house} [{label}]: "
-            f"tried {preferred} and {FALLBACK_MODEL}"
+        raise ValueError(
+            f"{label}: all models failed or returned empty"
         )
 
     def _try_model(
@@ -98,31 +136,31 @@ class ModelRouter:
         house: str,
         label: str,
     ) -> str | None:
-        """Attempt a single model call, returning None on failure."""
+        """Attempt a single model call. Returns None on failure or empty."""
         start = time.perf_counter()
+        is_openrouter = model.startswith("openrouter/")
+        kw: dict[str, Any] = dict(
+            model=model,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=0.7,
+        )
+        if is_openrouter:
+            kw["api_base"] = "https://openrouter.ai/api/v1"
+            kw["api_key"] = os.getenv("OPENROUTER_API_KEY")
+            kw["extra_headers"] = OPENROUTER_HEADERS
         try:
-            logger.info(
-                "ROUTER call  house=%s  model=%s  label=%s",
-                house, model, label,
-            )
-            response = litellm.completion(
-                model=model,
-                messages=messages,
-                max_tokens=max_tokens,
-            )
+            logger.info("ROUTER call  house=%s  model=%s  label=%s", house, model, label)
+            response = litellm.completion(**kw)
             content: str = response.choices[0].message.content or ""
             elapsed = time.perf_counter() - start
-            self.call_log.append((house, model, round(elapsed, 3), True))
-            logger.info(
-                "ROUTER ok  house=%s  model=%s  chars=%d  elapsed=%.2fs",
-                house, model, len(content), elapsed,
-            )
+            self.call_log.append((house, model, round(elapsed, 3), bool(content.strip())))
             return content
         except Exception as exc:
             elapsed = time.perf_counter() - start
             self.call_log.append((house, model, round(elapsed, 3), False))
             logger.warning(
-                "ROUTER failed  house=%s  model=%s  error=%s  elapsed=%.2fs",
-                house, model, exc, elapsed,
+                "ROUTER failed  house=%s  model=%s  label=%s  error=%s",
+                house, model, label, exc,
             )
             return None

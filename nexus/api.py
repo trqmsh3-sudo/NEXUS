@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Ensure data directories exist on startup (for Railway ephemeral filesystem)
+os.makedirs("data/knowledge_store", exist_ok=True)
+os.makedirs("data/builds", exist_ok=True)
 
 graph = KnowledgeGraph()
 router = ModelRouter()

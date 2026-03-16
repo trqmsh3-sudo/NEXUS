@@ -35,27 +35,24 @@ _MAX_RETRIES: int = 1
 # ------------------------------------------------------------------
 
 CODE_SYSTEM: str = (
-    "You are NEXUS House C. You receive a verified specification.\n"
-    "You write production-grade code only.\n"
-    "No placeholders. No TODOs. No 'implement this later'.\n"
-    "Every function must be complete and working.\n"
-    "Every function must have a simple, direct interface.\n"
-    "No external dependencies beyond Python standard library "
-    "unless the spec explicitly requires them.\n"
-    "No TODO comments. No placeholder functions.\n"
-    "The code must run as-is.\n"
-    "Return ONLY the raw code. No explanation. No markdown fences."
+    "You are NEXUS House C. Write simple, working Python code.\n"
+    "Rules:\n"
+    "- Use ONLY Python standard library. No external imports.\n"
+    "- Every function must be complete. No placeholders.\n"
+    "- MINIMAL: If the spec asks for one function, write ONLY that function. No classes, no validation, no doctest, no kill switches.\n"
+    "- Keep it simple — 20-50 lines maximum.\n"
+    "- Return ONLY raw Python code. No markdown. No explanation.\n"
+    "- Start with: # NEXUS Build"
 )
 
 TEST_SYSTEM: str = (
-    "You are writing pytest tests for this exact code.\n"
-    "Do NOT import anything that doesn't exist in the code.\n"
-    "Do NOT test functions that aren't in the code.\n"
-    "Do NOT use fixtures unless you define them yourself.\n"
-    "Write simple, direct tests that call the actual functions.\n"
-    "The tests must pass with zero modifications.\n"
-    "Return ONLY raw pytest code. No markdown. No explanation.\n"
-    "First line must be: import pytest"
+    "Write simple pytest tests for this exact code.\n"
+    "Rules:\n"
+    "- Import ONLY from the code file and pytest\n"
+    "- Test only functions that exist in the code\n"
+    "- Keep tests simple — assert statements only\n"
+    "- Maximum 10 test functions\n"
+    "- Return ONLY raw pytest code starting with: import pytest"
 )
 
 
@@ -265,13 +262,10 @@ class HouseC:
             f"Problem: {sso.redefined_problem}\n"
             f"Constraints: {json.dumps(sso.constraints)}\n"
             f"Success criteria: {json.dumps(sso.success_criteria)}\n"
-            f"Required inputs: {json.dumps(sso.required_inputs)}\n"
-            f"Expected outputs: {json.dumps(sso.expected_outputs)}\n"
             f"Domain: {sso.domain}\n\n"
-            "Write a single Python file with all functions and classes.\n"
-            "Use only the Python standard library.\n"
-            "Every function must be complete and callable.\n"
-            "The code must run as-is with: python main.py"
+            "Write ONE Python file. The file will be saved as main.py.\n"
+            "If the problem needs a single function (e.g. add two numbers), write ONLY that function — no extra classes or helpers.\n"
+            "Keep it minimal. Use only Python standard library."
         )
 
         code = self._call_llm(

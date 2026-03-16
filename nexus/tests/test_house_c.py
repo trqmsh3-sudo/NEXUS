@@ -227,7 +227,7 @@ class TestGenerateCode:
 
     @patch("nexus.core.model_router.litellm")
     def test_prompt_includes_constraints(self, mock_litellm: MagicMock) -> None:
-        mock_litellm.completion.return_value = _fake_response("pass")
+        mock_litellm.completion.return_value = _fake_response("def foo(): pass")
         hc = HouseC(knowledge_graph=_make_graph())
         hc._generate_code(_make_sso())
         user_msg = mock_litellm.completion.call_args[1]["messages"][1]["content"]
@@ -251,7 +251,7 @@ class TestGenerateTests:
 
     @patch("nexus.core.model_router.litellm")
     def test_prompt_includes_code(self, mock_litellm: MagicMock) -> None:
-        mock_litellm.completion.return_value = _fake_response("pass")
+        mock_litellm.completion.return_value = _fake_response("def test_x(): assert True")
         hc = HouseC(knowledge_graph=_make_graph())
         hc._generate_tests(_make_sso(), "def fibonacci(n): return n")
         user_msg = mock_litellm.completion.call_args[1]["messages"][1]["content"]

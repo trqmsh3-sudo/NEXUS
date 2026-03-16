@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -45,14 +46,14 @@ HOUSE_B_SYSTEM: str = (
 )
 
 HOUSE_D_SYSTEM: str = (
-    "You are House D — the destroyer. "
-    "Your job is to find every reason this plan will fail. "
-    "Be brutal. Be specific. Return ONLY valid JSON.\n\n"
-    "The JSON must have exactly these keys:\n"
-    '  "reasons_to_fail": [string, ...],\n'
-    '  "risks": [string, ...],\n'
-    '  "hidden_assumptions": [string, ...],\n'
-    '  "better_alternatives": [string, ...]\n'
+    "You are House D — the destroyer. Find reasons this plan will fail. "
+    "Return a JSON object with exactly these 4 keys:\n"
+    "- reasons_to_fail: list of 2 strings maximum\n"
+    "- risks: list of 2 strings maximum\n"
+    "- hidden_assumptions: list of 2 strings maximum\n"
+    "- better_alternatives: list of 1 string maximum\n\n"
+    "Keep each string under 100 characters.\n"
+    "Return ONLY the JSON object."
 )
 
 
@@ -465,7 +466,9 @@ class HouseB:
         )
 
     def _parse_json(self, raw: str, label: str) -> dict[str, Any]:
-        """Parse a JSON string from LLM output with one retry on failure.
+        """Parse a JSON string from LLM output with resilient fallbacks.
+
+        Handles markdown fences, extracted JSON objects, and truncated JSON.
 
         Args:
             raw: The raw string that should be valid JSON.
@@ -475,54 +478,56 @@ class HouseB:
             The parsed dictionary.
 
         Raises:
-            ValueError: If parsing fails on both the initial attempt
-                and the single retry.
+            ValueError: If parsing fails after all repair attempts.
         """
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError as first_err:
-            logger.warning(
-                "JSON parse failed [%s] (attempt 1): %s  raw=%r",
-                label, first_err, raw[:200],
-            )
-
-        stripped = raw.strip()
-        for prefix in ("```json", "```"):
-            if stripped.startswith(prefix):
-                stripped = stripped[len(prefix):]
-        if stripped.endswith("```"):
-            stripped = stripped[:-3]
-        stripped = stripped.strip()
+        text = re.sub(r"```json|```", "", raw).strip()
 
         try:
-            return json.loads(stripped)
+            return json.loads(text)
         except json.JSONDecodeError:
             pass
 
-        repaired = self._repair_truncated_json(stripped)
         try:
-            return json.loads(repaired)
-        except json.JSONDecodeError as final_err:
-            logger.error(
-                "JSON parse failed [%s] (attempt 3, giving up): %s",
-                label, final_err,
-            )
-            raise ValueError(
-                f"House B LLM returned invalid JSON for '{label}' after "
-                f"{_MAX_RETRIES} retry. Raw output: {raw[:300]}"
-            ) from final_err
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            if start >= 0 and end > start:
+                return json.loads(text[start:end])
+        except json.JSONDecodeError:
+            pass
 
-    @staticmethod
-    def _repair_truncated_json(text: str) -> str:
-        """Attempt to close truncated JSON arrays and objects."""
-        t = text.rstrip()
-        if t.endswith(","):
-            t = t[:-1]
-        last_quote = t.rfind('"')
-        if last_quote > 0 and t.count('"') % 2 != 0:
-            t = t[:last_quote + 1]
-        open_brackets = t.count("[") - t.count("]")
-        open_braces = t.count("{") - t.count("}")
-        t += "]" * max(0, open_brackets)
-        t += "}" * max(0, open_braces)
-        return t
+        try:
+            open_braces = text.count("{") - text.count("}")
+            open_brackets = text.count("[") - text.count("]")
+            repaired = text.rstrip()
+            if repaired.endswith(","):
+                repaired = repaired[:-1]
+            repaired += "]" * max(0, open_brackets)
+            repaired += "}" * max(0, open_braces)
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            pass
+
+        # Truncation inside a string: find last complete string, close structure
+        try:
+            repaired = text.rstrip()
+            last_complete = max(
+                (repaired.rfind(m) for m in ('",', '"]', '"\n')),
+                default=-1,
+            )
+            if last_complete < 0:
+                # No delimiter after last string; find last complete quoted string
+                for m in re.finditer(r'"([^"\\]|\\.)*"', repaired):
+                    last_complete = m.end() - 1  # position of closing quote
+            if last_complete >= 0:
+                truncated = repaired[: last_complete + 1].rstrip().rstrip(",")
+                open_brackets = truncated.count("[") - truncated.count("]")
+                open_braces = truncated.count("{") - truncated.count("}")
+                truncated += "]" * max(0, open_brackets)
+                truncated += "}" * max(0, open_braces)
+                return json.loads(truncated)
+        except (json.JSONDecodeError, ValueError, TypeError):
+            pass
+
+        raise ValueError(
+            f"House B returned invalid JSON for '{label}' after all attempts. Raw: {raw[:300]}"
+        )

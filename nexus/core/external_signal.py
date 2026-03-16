@@ -13,6 +13,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 from nexus.core.belief_certificate import BeliefCertificate
+from nexus.core.text_utils import clean_text
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -72,17 +73,17 @@ class ExternalSignalProvider:
         for item in items:
             if not isinstance(item, dict):
                 continue
-            full_name = item.get("full_name") or item.get("name") or "unknown"
-            description = item.get("description") or ""
-            language = item.get("language") or "general"
+            full_name = clean_text(item.get("full_name") or item.get("name") or "unknown")
+            description = clean_text(item.get("description") or "")
+            language = clean_text(item.get("language") or "general")
             stars = int(item.get("stargazers_count", 0))
             confidence = min(0.95, stars / 100000.0)
             if confidence < 0.5:
                 confidence = 0.5
-            claim = f"{full_name} is a highly-starred {language} project: {description}"
+            claim = clean_text(f"{full_name} is a highly-starred {language} project: {description}")
             if len(claim) > 500:
                 claim = claim[:497] + "..."
-            proof = f"# GitHub stars: {stars}"
+            proof = clean_text(f"# GitHub stars: {stars}")
             bc = BeliefCertificate(
                 claim=claim,
                 source="GitHub Trending",
@@ -119,13 +120,13 @@ class ExternalSignalProvider:
         entries = root.findall("atom:entry", ns)
         for entry in entries:
             title_elem = entry.find("atom:title", ns)
-            title = (title_elem.text or "").strip() if title_elem is not None else ""
+            title = clean_text((title_elem.text or "").strip() if title_elem is not None else "")
             if not title:
                 continue
-            claim = f"Recent AI research: {title}"
+            claim = clean_text(f"Recent AI research: {title}")
             if len(claim) > 500:
                 claim = claim[:497] + "..."
-            proof = f"# ArXiv paper: {title}"
+            proof = clean_text(f"# ArXiv paper: {title}")
             bc = BeliefCertificate(
                 claim=claim,
                 source="ArXiv API",

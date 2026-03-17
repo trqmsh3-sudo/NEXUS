@@ -52,6 +52,8 @@ class BeliefCertificate:
     domain: str = "General"
     attempts: list[dict[str, Any]] = field(default_factory=list)
     lessons_learned: list[str] = field(default_factory=list)
+    semantic_triples: list[dict[str, Any]] = field(default_factory=list)
+    conflict_flag: str | None = None  # e.g. "CONFLICT" when semantic clash detected
 
     def __post_init__(self) -> None:
         """Validate field constraints after initialisation."""
@@ -121,6 +123,8 @@ class BeliefCertificate:
             "domain": _clean(self.domain),
             "attempts": list(self.attempts),
             "lessons_learned": _clean(list(self.lessons_learned)),
+            "semantic_triples": list(self.semantic_triples),
+            "conflict_flag": self.conflict_flag,
         }
 
     @classmethod
@@ -143,6 +147,13 @@ class BeliefCertificate:
         attempts_raw = data.get("attempts", [])
         attempts = [a if isinstance(a, dict) else {} for a in attempts_raw]
         lessons = [clean_text(s) for s in data.get("lessons_learned", [])]
+        st_raw = data.get("semantic_triples", [])
+        semantic_triples = [
+            t if isinstance(t, dict) else {}
+            for t in (st_raw if isinstance(st_raw, list) else [])
+        ]
+        cf = data.get("conflict_flag")
+        conflict_flag = str(cf) if cf else None
         return cls(
             claim=clean_text(data["claim"]),
             source=clean_text(data["source"]),
@@ -156,6 +167,8 @@ class BeliefCertificate:
             domain=clean_text(data.get("domain", "General")),
             attempts=attempts,
             lessons_learned=lessons,
+            semantic_triples=semantic_triples,
+            conflict_flag=conflict_flag,
         )
 
     def __repr__(self) -> str:

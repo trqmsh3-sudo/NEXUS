@@ -8,9 +8,11 @@ passing ``is_valid()`` and ``is_expired() == False``.
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 from dataclasses import dataclass, field
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from nexus.core.belief_certificate import BeliefCertificate
 from nexus.core.persistence import PersistenceManager
@@ -41,6 +43,9 @@ class KnowledgeGraph:
     domain_index: dict[str, set[str]] = field(default_factory=dict)
     storage_path: str | None = None
     persistence: PersistenceManager = field(init=False)
+    governor_alert: Callable[[dict[str, Any]], None] | None = field(
+        default=None, init=False, repr=False,
+    )
 
     def __post_init__(self) -> None:
         path = self.storage_path or "data/knowledge_store/beliefs.json"
@@ -132,6 +137,10 @@ class KnowledgeGraph:
         self.beliefs[belief.claim] = belief
         self._index_belief(belief)
         logger.info("ACCEPTED claim=%r  domain=%r  confidence=%s", belief.claim, belief.domain, belief.confidence)
+        try:
+            _semantic_contradiction_after_add(self, belief)
+        except Exception as exc:
+            logger.warning("Semantic contradiction check failed (non-fatal): %s", exc)
         self.persistence.auto_save(self)
         return True
 
@@ -391,3 +400,141 @@ class KnowledgeGraph:
     def __contains__(self, claim: str) -> bool:
         """Check if a claim exists in the graph."""
         return claim in self.beliefs
+
+
+# ------------------------------------------------------------------
+# Semantic contradiction (Groq free model)
+# ------------------------------------------------------------------
+
+
+def _groq_completion(messages: list[dict[str, str]], max_tokens: int = 800) -> str:
+    """Single Groq call; returns empty string on missing key or error."""
+    import os
+    key = os.getenv("GROQ_API_KEY")
+    if not key:
+        return ""
+    try:
+        import litellm
+        litellm.suppress_debug_info = True
+        r = litellm.completion(
+            model="groq/llama-3.1-8b-instant",
+            messages=messages,
+            api_key=key,
+            temperature=0.2,
+            max_tokens=max_tokens,
+        )
+        return (r.choices[0].message.content or "").strip()
+    except Exception as exc:
+        logger.debug("groq completion failed: %s", exc)
+        return ""
+
+
+def _parse_json_array(text: str) -> list[dict[str, Any]]:
+    """Extract a JSON array from model output; return list of dicts."""
+    text = text.strip()
+    for wrapper in ("```json", "```"):
+        if wrapper in text:
+            idx = text.find(wrapper) + len(wrapper)
+            text = text[idx:].lstrip()
+    match = re.search(r"\[[\s\S]*\]", text)
+    if not match:
+        return []
+    try:
+        arr = json.loads(match.group(0))
+        if not isinstance(arr, list):
+            return []
+        return [x for x in arr if isinstance(x, dict)]
+    except json.JSONDecodeError:
+        return []
+
+
+def _extract_triples(claim: str) -> list[dict[str, Any]]:
+    """Extract up to 3 (subject, predicate, object) triples from a claim via Groq."""
+    out = _groq_completion([
+        {"role": "system", "content": "Return ONLY a JSON array of up to 3 objects. Each object has keys: subject, predicate, object (strings). No other text."},
+        {"role": "user", "content": f"Claim:\n{claim[:2000]}\n\nExtract up to 3 factual triples."},
+    ], max_tokens=600)
+    arr = _parse_json_array(out)
+    triples = []
+    for t in arr[:3]:
+        s = t.get("subject") or t.get("s")
+        p = t.get("predicate") or t.get("p")
+        o = t.get("object") or t.get("o")
+        if isinstance(s, str) and isinstance(p, str) and isinstance(o, str):
+            triples.append({"subject": s[:200], "predicate": p[:200], "object": o[:200]})
+    return triples[:3]
+
+
+def _groq_detect_contradiction(
+    graph: KnowledgeGraph,
+    new_claim: str,
+    new_triples: list[dict[str, Any]],
+    others: list[tuple[str, list[dict[str, Any]]]],
+) -> dict[str, Any]:
+    """Ask Groq if new belief contradicts any existing; return {contradiction, claim_a, claim_b, reason}."""
+    if not others:
+        return {"contradiction": False}
+    payload = json.dumps({
+        "new_claim": new_claim[:800],
+        "new_triples": new_triples,
+        "existing": [{"claim": c[:400], "triples": t} for c, t in others[:30]],
+    }, ensure_ascii=False)
+    out = _groq_completion([
+        {"role": "system", "content": "Return ONLY valid JSON with keys: contradiction (boolean), claim_a (string), claim_b (string), reason (string). If no contradiction, contradiction=false and others empty."},
+        {"role": "user", "content": f"Does the new belief contradict any existing? Payload:\n{payload}"},
+    ], max_tokens=400)
+    try:
+        # Find first { ... }
+        match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", out)
+        if match:
+            obj = json.loads(match.group(0))
+            return {
+                "contradiction": bool(obj.get("contradiction")),
+                "claim_a": (obj.get("claim_a") or "").strip()[:500],
+                "claim_b": (obj.get("claim_b") or "").strip()[:500],
+                "reason": (obj.get("reason") or "").strip()[:300],
+            }
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return {"contradiction": False}
+
+
+def _semantic_contradiction_after_add(graph: KnowledgeGraph, belief: BeliefCertificate) -> None:
+    """After a belief is added: extract triples, compare to existing, flag CONFLICT and alert governor."""
+    triples = _extract_triples(belief.claim)
+    belief.semantic_triples = triples
+
+    others: list[tuple[str, list[dict[str, Any]]]] = [
+        (b.claim, getattr(b, "semantic_triples", []) or [])
+        for b in graph.beliefs.values()
+        if b.claim != belief.claim
+    ]
+    if not others:
+        return
+
+    result = _groq_detect_contradiction(graph, belief.claim, triples, others)
+    if not result.get("contradiction"):
+        return
+
+    claim_a = result.get("claim_a") or ""
+    claim_b = result.get("claim_b") or ""
+    if claim_a in graph.beliefs and claim_b in graph.beliefs:
+        graph.beliefs[claim_a].conflict_flag = "CONFLICT"
+        graph.beliefs[claim_b].conflict_flag = "CONFLICT"
+    elif belief.claim in (claim_a, claim_b):
+        belief.conflict_flag = "CONFLICT"
+        other_claim = claim_b if claim_a == belief.claim else claim_a
+        if other_claim in graph.beliefs:
+            graph.beliefs[other_claim].conflict_flag = "CONFLICT"
+
+    alert = {
+        "type": "CONFLICT",
+        "claims": [claim_a, claim_b],
+        "reason": result.get("reason", ""),
+    }
+    logger.warning("GOVERNOR CONFLICT ALERT: semantic contradiction %s", alert)
+    if graph.governor_alert:
+        try:
+            graph.governor_alert(alert)
+        except Exception:
+            pass

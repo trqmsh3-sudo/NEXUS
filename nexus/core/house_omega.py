@@ -32,6 +32,8 @@ from nexus.core.bounty import BountySystem
 logger: logging.Logger = logging.getLogger(__name__)
 
 _HISTORY_PATH: pathlib.Path = pathlib.Path("data/cycle_history.json")
+_BOUNDARY_PATH: pathlib.Path = pathlib.Path("data/boundary_pairs.json")
+_GOVERNOR_ALERTS_PATH: pathlib.Path = pathlib.Path("data/governor_alerts.json")
 
 
 # ------------------------------------------------------------------
@@ -182,6 +184,11 @@ class HouseOmega:
     _last_sleep: datetime | None = field(default=None, repr=False)
     anti_beliefs: AntiBeliefGraph = field(default_factory=AntiBeliefGraph, repr=False)
     bounty_system: BountySystem = field(default_factory=BountySystem, repr=False)
+    conflict_alerts: list[dict[str, Any]] = field(default_factory=list, repr=False)
+
+    def __post_init__(self) -> None:
+        """Wire governor alert callback so KnowledgeGraph can notify on CONFLICT."""
+        self.knowledge_graph.governor_alert = self._governor_conflict_alert
 
     # ------------------------------------------------------------------
     # 1. run  —  THE MAIN LOOP
@@ -437,6 +444,8 @@ class HouseOmega:
                 last_verified=datetime.now(timezone.utc),
                 attempts=list(b.attempts),
                 lessons_learned=list(b.lessons_learned),
+                semantic_triples=list(getattr(b, "semantic_triples", []) or []),
+                conflict_flag=getattr(b, "conflict_flag", None),
             ))
         if refreshed:
             self.knowledge_graph.inject_external_signal(refreshed)
@@ -691,10 +700,78 @@ class HouseOmega:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _governor_conflict_alert(self, payload: dict[str, Any]) -> None:
+        """Called by KnowledgeGraph when semantic contradiction is detected."""
+        self.conflict_alerts.append(payload)
+        logger.warning("GOVERNOR CONFLICT ALERT: %s", payload)
+        try:
+            _GOVERNOR_ALERTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            existing: list[dict[str, Any]] = []
+            if _GOVERNOR_ALERTS_PATH.exists():
+                raw = _GOVERNOR_ALERTS_PATH.read_text(encoding="utf-8")
+                try:
+                    existing = json.loads(raw or "[]")
+                except json.JSONDecodeError:
+                    pass
+            existing.append({**payload, "timestamp": datetime.now(timezone.utc).isoformat()})
+            _GOVERNOR_ALERTS_PATH.write_text(
+                json.dumps(existing, indent=2, default=str), encoding="utf-8",
+            )
+        except OSError as exc:
+            logger.warning("Failed to persist governor alert: %s", exc)
+
+    def _record_boundary_pair(self, result: CycleResult) -> None:
+        """Ask Gemini free: minimal change that would flip this outcome; store in boundary_pairs.json."""
+        try:
+            summary = (
+                f"success={result.success} belief_added={result.belief_added} "
+                f"reason={result.failure_reason or 'none'}"
+            )
+            user_snip = (result.user_input or "")[:500]
+            prompt = (
+                f"NEXUS cycle outcome: {summary}\n\n"
+                f"User input: {user_snip}\n\n"
+                "What is the minimal change that would flip this outcome? "
+                "Answer in one or two sentences."
+            )
+            raw = self.house_b.router.complete(
+                house="house_b",
+                system="Answer concisely. One or two sentences only.",
+                user=prompt,
+                label="boundary",
+            )
+            minimal_flip = (raw or "").strip()[:1000]
+            pair = {
+                "cycle_id": result.cycle_id,
+                "success": result.success,
+                "user_input": user_snip,
+                "outcome_summary": summary,
+                "minimal_flip_change": minimal_flip,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            _BOUNDARY_PATH.parent.mkdir(parents=True, exist_ok=True)
+            existing: list[dict[str, Any]] = []
+            if _BOUNDARY_PATH.exists():
+                raw_file = _BOUNDARY_PATH.read_text(encoding="utf-8")
+                try:
+                    existing = json.loads(raw_file or "[]")
+                except json.JSONDecodeError:
+                    pass
+            existing.append(pair)
+            _BOUNDARY_PATH.write_text(
+                json.dumps(existing, indent=2, default=str), encoding="utf-8",
+            )
+        except Exception as exc:
+            logger.debug("Boundary pair recording failed (non-fatal): %s", exc)
+
     def _finalise_cycle(self, result: CycleResult) -> None:
         """Post-cycle bookkeeping: increment counter, log, sleep/external check."""
         self.cycle_count += 1
         self._log_cycle(result)
+        try:
+            self._record_boundary_pair(result)
+        except Exception as exc:
+            logger.debug("Boundary recording failed: %s", exc)
 
         if self.cycle_count % self.external_signal_interval == 0:
             self._inject_automatic_external_signal()

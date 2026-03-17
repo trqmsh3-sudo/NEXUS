@@ -24,6 +24,26 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 _MAX_RETRIES: int = 1
 
+
+def _normalize_three_success_criteria(
+    raw: Any,
+    redefined_problem: str,
+) -> list[str]:
+    """Ensure exactly three measurable success criteria for the SSO."""
+    out: list[str] = []
+    if isinstance(raw, list):
+        for x in raw:
+            if isinstance(x, str) and x.strip():
+                out.append(x.strip()[:500])
+    filler = [
+        f"Automated tests pass for the implementation implied by: {redefined_problem[:120]}",
+        "No unhandled exceptions on representative valid and edge-case inputs",
+        "Public API matches the specified signatures and return types in the task",
+    ]
+    while len(out) < 3:
+        out.append(filler[len(out) % len(filler)])
+    return out[:3]
+
 # ------------------------------------------------------------------
 # System prompts
 # ------------------------------------------------------------------
@@ -38,7 +58,9 @@ HOUSE_B_SYSTEM: str = (
     '  "redefined_problem": string,\n'
     '  "assumptions": [string, ...],\n'
     '  "constraints": [string, ...],\n'
-    '  "success_criteria": [string, ...],\n'
+    '  "success_criteria": EXACTLY 3 strings — each must be a MEASURABLE,\n'
+    "    testable criterion (what pytest or a human can verify), e.g.\n"
+    '    \"function returns True for valid input\", not vague goals.\n'
     '  "required_inputs": [string, ...],\n'
     '  "expected_outputs": [string, ...],\n'
     '  "domain": string,\n'
@@ -246,12 +268,17 @@ class HouseB:
 
         parsed = self._parse_json(raw, label="redefine")
 
+        rp = parsed.get("redefined_problem", user_input)
+        sc = _normalize_three_success_criteria(
+            parsed.get("success_criteria", []),
+            rp,
+        )
         sso = StructuredSpecificationObject(
             original_input=user_input,
-            redefined_problem=parsed.get("redefined_problem", user_input),
+            redefined_problem=rp,
             assumptions=parsed.get("assumptions", []),
             constraints=parsed.get("constraints", []),
-            success_criteria=parsed.get("success_criteria", []),
+            success_criteria=sc,
             required_inputs=parsed.get("required_inputs", []),
             expected_outputs=parsed.get("expected_outputs", []),
             domain=parsed.get("domain", "General"),
@@ -328,12 +355,17 @@ class HouseB:
 
         parsed = self._parse_json(raw, label="refine")
 
+        rp2 = parsed.get("redefined_problem", sso.redefined_problem)
+        sc2 = _normalize_three_success_criteria(
+            parsed.get("success_criteria", sso.success_criteria),
+            rp2,
+        )
         refined = StructuredSpecificationObject(
             original_input=sso.original_input,
-            redefined_problem=parsed.get("redefined_problem", sso.redefined_problem),
+            redefined_problem=rp2,
             assumptions=parsed.get("assumptions", sso.assumptions),
             constraints=parsed.get("constraints", sso.constraints),
-            success_criteria=parsed.get("success_criteria", sso.success_criteria),
+            success_criteria=sc2,
             required_inputs=parsed.get("required_inputs", sso.required_inputs),
             expected_outputs=parsed.get("expected_outputs", sso.expected_outputs),
             domain=parsed.get("domain", sso.domain),

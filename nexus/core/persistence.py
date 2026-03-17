@@ -11,9 +11,10 @@ import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from nexus.core.belief_certificate import BeliefCertificate
+from nexus.core import database as nexus_db
 
 if TYPE_CHECKING:
     from nexus.core.knowledge_graph import KnowledgeGraph
@@ -50,6 +51,13 @@ class PersistenceManager:
             if b.is_valid() and not b.is_expired()
         ]
         data = [b.to_dict() for b in valid_beliefs]
+        if nexus_db.save_beliefs(data):
+            logger.info(
+                "PERSISTENCE saved to Supabase  beliefs=%d",
+                len(valid_beliefs),
+            )
+            return
+
         path = Path(self.storage_path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -77,47 +85,33 @@ class PersistenceManager:
         )
 
     def load(self) -> list[BeliefCertificate]:
-        """Load beliefs from disk, skipping invalid or corrupted entries.
-
-        Skips any belief that:
-        - Fails deserialization (logs and continues)
-        - Is expired
-        - Fails is_valid()
-
-        On corrupted storage or missing file, returns [] and logs a
-        warning. Never raises.
-
-        Returns:
-            List of clean, valid, non-expired BeliefCertificates.
-        """
+        """Load beliefs from Supabase (if configured) else JSON file."""
         path = Path(self.storage_path)
         loaded: list[BeliefCertificate] = []
         skipped = 0
 
-        if not path.exists():
-            logger.info("PERSISTENCE no file  path=%s  loaded=0  skipped=0", path)
+        db_raw = nexus_db.load_belief_dicts()
+        if db_raw is not None:
+            raw: list[Any] = db_raw
+        elif path.exists():
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                logger.warning(
+                    "PERSISTENCE corrupted or unreadable  path=%s  error=%s",
+                    path, exc,
+                )
+                self.last_load_count = 0
+                self.last_skip_count = 0
+                return []
+        else:
+            logger.info("PERSISTENCE no data  path=%s  loaded=0", path)
             self.last_load_count = 0
             self.last_skip_count = 0
             return loaded
 
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            logger.warning(
-                "PERSISTENCE corrupted or unreadable  path=%s  error=%s  "
-                "starting fresh",
-                path, exc,
-            )
-            self.last_load_count = 0
-            self.last_skip_count = 0
-            return []
-
         if not isinstance(raw, list):
-            logger.warning(
-                "PERSISTENCE invalid format (expected list)  path=%s  "
-                "starting fresh",
-                path,
-            )
+            logger.warning("PERSISTENCE invalid format (expected list)  path=%s", path)
             self.last_load_count = 0
             self.last_skip_count = 1
             return []

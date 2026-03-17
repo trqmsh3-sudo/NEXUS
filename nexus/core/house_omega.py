@@ -16,15 +16,14 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-import json
-import pathlib
 from typing import Any
 
 from nexus.core.belief_certificate import BeliefCertificate
 from nexus.core.external_signal import ExternalSignalProvider
 from nexus.core.house_b import HouseB, StructuredSpecificationObject
-from nexus.core.house_c import BuildResult, HouseC
-from nexus.core.house_d import DestructionReport, HouseD
+from nexus.core.house_c import BuildArtifact, BuildResult, HouseC
+from nexus.core.house_d import AttackResult, DestructionReport, HouseD
+from nexus.core.database import load_cycle_history, save_cycle_history
 from nexus.core.knowledge_graph import KnowledgeGraph
 from nexus.core.anti_belief import AntiBeliefGraph
 from nexus.core.bounty import BountySystem
@@ -89,6 +88,106 @@ class CycleResult:
             "failure_reason": self.failure_reason,
             "refinement_attempts": self.refinement_attempts,
         }
+
+
+def cycle_result_from_dict(d: dict[str, Any]) -> CycleResult:
+    """Rehydrate CycleResult from persisted JSON (best-effort)."""
+    cr = CycleResult(
+        cycle_id=str(d.get("cycle_id") or uuid.uuid4()),
+        user_input=str(d.get("user_input") or ""),
+        belief_added=bool(d.get("belief_added")),
+        cycle_time_seconds=float(d.get("cycle_time_seconds") or 0),
+        success=bool(d.get("success")),
+        failure_reason=d.get("failure_reason"),
+        refinement_attempts=int(d.get("refinement_attempts") or 0),
+    )
+    try:
+        if d.get("sso") and isinstance(d["sso"], dict):
+            cr.sso = StructuredSpecificationObject.from_dict(d["sso"])
+    except Exception:
+        pass
+    try:
+        if d.get("destruction_report") and isinstance(d["destruction_report"], dict):
+            dr = d["destruction_report"]
+            attacks = [
+                AttackResult(
+                    target=str(a.get("target", "")),
+                    attack_type=str(a.get("attack_type", "")),
+                    severity=float(a.get("severity", 0)),
+                    description=str(a.get("description", "")),
+                    is_fatal=bool(a.get("is_fatal")),
+                )
+                for a in dr.get("attacks", [])
+                if isinstance(a, dict)
+            ]
+            cr.destruction_report = DestructionReport(
+                target_description=str(dr.get("target_description", "")),
+                attacks=attacks,
+                survived=bool(dr.get("survived", True)),
+                survival_score=float(dr.get("survival_score", 1.0)),
+                cycles_survived=int(dr.get("cycles_survived", 0)),
+                recommendation=str(dr.get("recommendation", "REJECT")),
+            )
+    except Exception:
+        pass
+    try:
+        if d.get("build_result") and isinstance(d["build_result"], dict):
+            br = d["build_result"]
+            ad = br.get("artifact") or {}
+            sso_raw = ad.get("sso") or {}
+            if isinstance(sso_raw, dict) and sso_raw.get("original_input") is not None:
+                sso = StructuredSpecificationObject.from_dict(sso_raw)
+            else:
+                sso = StructuredSpecificationObject(
+                    original_input="", redefined_problem="",
+                )
+            cat = ad.get("created_at")
+            try:
+                created_at = datetime.fromisoformat(str(cat)) if cat else datetime.now(timezone.utc)
+            except Exception:
+                created_at = datetime.now(timezone.utc)
+            art = BuildArtifact(
+                artifact_id=str(ad.get("artifact_id") or uuid.uuid4()),
+                sso=sso,
+                code=str(ad.get("code") or ""),
+                language=str(ad.get("language") or "python"),
+                tests=str(ad.get("tests") or ""),
+                documentation=str(ad.get("documentation") or ""),
+                created_at=created_at,
+                passed_validation=bool(ad.get("passed_validation")),
+                validation_errors=list(ad.get("validation_errors") or []),
+                execution_proof=ad.get("execution_proof"),
+                healing_attempts=int(ad.get("healing_attempts") or 0),
+            )
+            hdr = br.get("house_d_report") or {}
+            h_attacks = [
+                AttackResult(
+                    target=str(a.get("target", "")),
+                    attack_type=str(a.get("attack_type", "")),
+                    severity=float(a.get("severity", 0)),
+                    description=str(a.get("description", "")),
+                    is_fatal=bool(a.get("is_fatal")),
+                )
+                for a in hdr.get("attacks", [])
+                if isinstance(a, dict)
+            ]
+            hdr_obj = DestructionReport(
+                target_description=str(hdr.get("target_description", "")),
+                attacks=h_attacks,
+                survived=bool(hdr.get("survived", True)),
+                survival_score=float(hdr.get("survival_score", 1.0)),
+                cycles_survived=int(hdr.get("cycles_survived", 0)),
+                recommendation=str(hdr.get("recommendation", "REJECT")),
+            )
+            cr.build_result = BuildResult(
+                artifact=art,
+                success=bool(br.get("success")),
+                house_d_report=hdr_obj,
+                ready_for_house_a=bool(br.get("ready_for_house_a")),
+            )
+    except Exception:
+        pass
+    return cr
 
 
 @dataclass
@@ -204,6 +303,11 @@ class HouseOmega:
         self.house_b.skill_library = self.skill_library
         self.house_c.skill_library = self.skill_library
         self.house_b.counterfactual_log = self.counterfactual_log
+        raw_hist = load_cycle_history(_HISTORY_PATH)
+        self.cycle_history = [
+            cycle_result_from_dict(x) for x in raw_hist if isinstance(x, dict)
+        ]
+        self.cycle_count = len(self.cycle_history)
 
     # ------------------------------------------------------------------
     # 1. run  —  THE MAIN LOOP
@@ -911,12 +1015,9 @@ class HouseOmega:
             )
 
     def _persist_history(self) -> None:
-        """Write the full cycle history to ``data/cycle_history.json``."""
+        """Persist cycle history to Supabase (if configured) or JSON file."""
         try:
-            _HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
             data = [c.to_dict() for c in self.cycle_history]
-            _HISTORY_PATH.write_text(
-                json.dumps(data, indent=2, default=str), encoding="utf-8",
-            )
+            save_cycle_history(data, _HISTORY_PATH)
         except OSError as exc:
             logger.warning("Failed to persist cycle history: %s", exc)

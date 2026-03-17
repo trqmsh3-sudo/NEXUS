@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from nexus.core.belief_certificate import BeliefCertificate
+from nexus.core.database import load_skills, save_skills
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -219,20 +220,14 @@ class SkillLibrary:
 
     def save(self) -> None:
         try:
-            path = Path(self.storage_path)
-            path.parent.mkdir(parents=True, exist_ok=True)
             data = [s.to_dict() for s in self.skills.values()]
-            path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+            save_skills(data, Path(self.storage_path))
         except OSError as exc:
             logger.warning("SkillLibrary save failed: %s", exc)
 
     def load(self) -> None:
         try:
-            path = Path(self.storage_path)
-            if not path.exists():
-                return
-            raw = path.read_text(encoding="utf-8")
-            data = json.loads(raw or "[]")
+            data = load_skills(Path(self.storage_path))
             if not isinstance(data, list):
                 return
             for item in data:

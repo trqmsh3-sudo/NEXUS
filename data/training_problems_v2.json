@@ -51,6 +51,16 @@
     "Write a Python function strip_suffix(s: str, suffix: str) -> str",
     "Write a Python function repeat_string(s: str, n: int) -> str",
     "Write a Python function is_substring(haystack: str, needle: str) -> bool",
-    "Write a Python function that validates an Israeli phone number"
+    "Write a Python function that validates an Israeli phone number",
+    "Design a Python class ThreadSafeCounter with increment, decrement, and value methods using a lock",
+    "Design a Python class MinStack that supports push, pop, top, and getMin in O(1) time",
+    "Write a Python function longest_common_subsequence(s1: str, s2: str) -> str",
+    "Design a Python class Trie for prefix-based string storage and search",
+    "Write a Python function knapsack_01(weights: list[int], values: list[int], capacity: int) -> int",
+    "Design a Python class BinarySearchTree with insert, search, and inorder_traversal methods",
+    "Write a Python function topological_sort(graph: dict[str, list[str]]) -> list[str]",
+    "Design a Python class RateLimiter that allows at most N requests per second per key",
+    "Write a Python function merge_k_sorted_lists(lists: list[list[int]]) -> list[int]",
+    "Design a Python class PubSub with subscribe(topic), unsubscribe(topic), and publish(topic, message)"
   ]
 }

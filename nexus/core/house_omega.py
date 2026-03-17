@@ -350,25 +350,13 @@ class HouseOmega:
         return result
 
     # ------------------------------------------------------------------
-    # 2. run_sleep_cycle
+    # 2. run_light_sleep (pruning only, no LLM) — every 10 cycles
     # ------------------------------------------------------------------
 
-    def run_sleep_cycle(self) -> dict[str, Any]:
-        """Compress and clean the knowledge graph during a sleep cycle.
-
-        Steps:
-        1. Prune all expired beliefs.
-        2. Flag beliefs with confidence < 0.6.
-        3. Detect contradiction clusters.
-        4. Re-verify and re-inject the top beliefs.
-        5. Log completion.
-
-        Returns:
-            Summary dict with ``pruned``, ``flagged``,
-            ``contradictions``, and ``duration`` keys.
-        """
+    def run_light_sleep(self) -> dict[str, Any]:
+        """Pruning-only sleep: no LLM calls. Run every 10 cycles."""
         start = time.perf_counter()
-        logger.info("OMEGA sleep cycle started  cycle_count=%d", self.cycle_count)
+        logger.info("OMEGA light sleep started  cycle_count=%d", self.cycle_count)
 
         pruned = self.knowledge_graph.prune_expired()
 
@@ -395,6 +383,40 @@ class HouseOmega:
                     b.claim[:60], conflicts,
                 )
 
+        elapsed = time.perf_counter() - start
+        logger.info(
+            "OMEGA light sleep complete  pruned=%d  flagged=%d  "
+            "contradictions=%d  elapsed=%.2fs",
+            pruned, flagged, contradiction_count, elapsed,
+        )
+        return {
+            "pruned": pruned,
+            "flagged": flagged,
+            "contradictions": contradiction_count,
+            "duration": round(elapsed, 4),
+        }
+
+    # ------------------------------------------------------------------
+    # 3. run_sleep_cycle (deep sleep: light + chained inference) — every 50 cycles
+    # ------------------------------------------------------------------
+
+    def run_sleep_cycle(self) -> dict[str, Any]:
+        """Deep sleep: run light_sleep (pruning) then chained inference + LLM.
+
+        Steps:
+        1. Run light_sleep (prune, flag, contradiction check).
+        2. Re-verify and re-inject the top beliefs.
+        3. Chained inference: synthesise up to 5 new beliefs from pairs (LLM).
+        4. Persist and log.
+        """
+        start = time.perf_counter()
+        logger.info("OMEGA deep sleep started  cycle_count=%d", self.cycle_count)
+
+        light_result = self.run_light_sleep()
+        pruned = light_result["pruned"]
+        flagged = light_result["flagged"]
+        contradiction_count = light_result["contradictions"]
+
         top_beliefs = sorted(
             self.knowledge_graph.beliefs.values(),
             key=lambda b: b.confidence,
@@ -413,6 +435,8 @@ class HouseOmega:
                 domain=b.domain,
                 created_at=b.created_at,
                 last_verified=datetime.now(timezone.utc),
+                attempts=list(b.attempts),
+                lessons_learned=list(b.lessons_learned),
             ))
         if refreshed:
             self.knowledge_graph.inject_external_signal(refreshed)
@@ -677,10 +701,16 @@ class HouseOmega:
 
         if self.cycle_count % self.sleep_cycle_interval == 0:
             logger.info(
-                "OMEGA triggering automatic sleep cycle at count=%d",
+                "OMEGA triggering deep sleep at count=%d",
                 self.cycle_count,
             )
             self.run_sleep_cycle()
+        elif self.cycle_count % 10 == 0:
+            logger.info(
+                "OMEGA triggering light sleep at count=%d",
+                self.cycle_count,
+            )
+            self.run_light_sleep()
 
     def _inject_automatic_external_signal(self) -> None:
         """IRON LAW: Inject fresh external knowledge every N cycles."""

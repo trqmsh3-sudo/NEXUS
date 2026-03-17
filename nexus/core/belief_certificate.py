@@ -50,6 +50,8 @@ class BeliefCertificate:
     downstream_dependents: list[str] = field(default_factory=list)
     executable_proof: str | None = None
     domain: str = "General"
+    attempts: list[dict[str, Any]] = field(default_factory=list)
+    lessons_learned: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         """Validate field constraints after initialisation."""
@@ -117,6 +119,8 @@ class BeliefCertificate:
             "downstream_dependents": _clean(list(self.downstream_dependents)),
             "executable_proof": _clean(self.executable_proof) if self.executable_proof else None,
             "domain": _clean(self.domain),
+            "attempts": list(self.attempts),
+            "lessons_learned": _clean(list(self.lessons_learned)),
         }
 
     @classmethod
@@ -136,6 +140,9 @@ class BeliefCertificate:
             KeyError: If a required field is missing from *data*.
             ValueError: If field values are out of range.
         """
+        attempts_raw = data.get("attempts", [])
+        attempts = [a if isinstance(a, dict) else {} for a in attempts_raw]
+        lessons = [clean_text(s) for s in data.get("lessons_learned", [])]
         return cls(
             claim=clean_text(data["claim"]),
             source=clean_text(data["source"]),
@@ -147,6 +154,8 @@ class BeliefCertificate:
             downstream_dependents=[clean_text(d) for d in data.get("downstream_dependents", [])],
             executable_proof=clean_text(data["executable_proof"]) if data.get("executable_proof") else None,
             domain=clean_text(data.get("domain", "General")),
+            attempts=attempts,
+            lessons_learned=lessons,
         )
 
     def __repr__(self) -> str:

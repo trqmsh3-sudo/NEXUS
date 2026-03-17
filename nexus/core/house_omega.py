@@ -16,6 +16,8 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+import json
+import pathlib
 from typing import Any
 
 from nexus.core.belief_certificate import BeliefCertificate
@@ -105,6 +107,7 @@ class SystemHealth:
     total_beliefs: int = 0
     self_built_beliefs: int = 0
     autonomy_ratio: float = 0.0
+    daily_cost: float = 0.0
     average_cycle_time: float = 0.0
     last_sleep_cycle: datetime | None = None
     next_sleep_cycle_due: datetime = field(
@@ -122,6 +125,7 @@ class SystemHealth:
             "total_beliefs": self.total_beliefs,
             "self_built_beliefs": self.self_built_beliefs,
             "autonomy_ratio": round(self.autonomy_ratio, 4),
+            "daily_cost": round(self.daily_cost, 4),
             "average_cycle_time": round(self.average_cycle_time, 4),
             "last_sleep_cycle": (
                 self.last_sleep_cycle.isoformat()
@@ -488,6 +492,23 @@ class HouseOmega:
         )
         autonomy_ratio = self_built / total_beliefs if total_beliefs > 0 else 0.0
 
+        # Read daily LLM cost from the router's tracking file, if present.
+        daily_cost = 0.0
+        cost_path = pathlib.Path("data/daily_cost.json")
+        try:
+            if cost_path.exists():
+                raw = cost_path.read_text(encoding="utf-8")
+                data = json.loads(raw or "{}")
+                date_str = data.get("date") or ""
+                total_cost = float(data.get("total_cost") or 0.0)
+                if date_str:
+                    # Only report cost for the current UTC day.
+                    today = datetime.now(timezone.utc).date().isoformat()
+                    if date_str == today:
+                        daily_cost = total_cost
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("HEALTH cost load failed: %s", exc)
+
         domains = list(self.knowledge_graph.domain_index.keys())
 
         remaining_cycles = self.sleep_cycle_interval - (
@@ -505,6 +526,7 @@ class HouseOmega:
             total_beliefs=total_beliefs,
             self_built_beliefs=self_built,
             autonomy_ratio=round(autonomy_ratio, 4),
+            daily_cost=round(daily_cost, 4),
             average_cycle_time=round(avg_time, 4),
             last_sleep_cycle=self._last_sleep,
             next_sleep_cycle_due=next_sleep,

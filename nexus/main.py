@@ -177,6 +177,7 @@ def _print_health(health: SystemHealth) -> None:
     print(f"  System score:      {health.system_score:.2%}")
     print(f"  Total beliefs:     {health.total_beliefs}")
     print(f"  Autonomy ratio:    {health.autonomy_ratio:.2%}")
+    print(f"  Daily LLM cost:    ${health.daily_cost:.4f}")
     print(f"  Avg cycle time:    {health.average_cycle_time:.2f}s")
     print(f"  Domains:           {', '.join(health.domains_covered) or '(none)'}")
     if health.last_sleep_cycle:

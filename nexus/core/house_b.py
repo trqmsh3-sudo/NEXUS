@@ -20,6 +20,7 @@ from nexus.core.belief_certificate import BeliefCertificate
 from nexus.core.knowledge_graph import KnowledgeGraph
 from nexus.core.model_router import ModelRouter
 from nexus.core.skill_library import SkillLibrary
+from nexus.core.counterfactual import CounterfactualEntry, CounterfactualLog, groq_counterfactual_alternatives
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -227,12 +228,13 @@ class HouseB:
     knowledge_graph: KnowledgeGraph
     router: ModelRouter = field(default_factory=ModelRouter)
     skill_library: SkillLibrary | None = None
+    counterfactual_log: CounterfactualLog | None = None
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def redefine(self, user_input: str) -> StructuredSpecificationObject:
+    def redefine(self, user_input: str, *, cycle_id: str = "") -> StructuredSpecificationObject:
         """Redefine a problem from raw human input.
 
         Queries the knowledge graph for domain-relevant beliefs,
@@ -294,6 +296,20 @@ class HouseB:
         )
 
         sso.minority_report = self._generate_minority_report(sso)
+
+        if self.counterfactual_log and cycle_id:
+            rejected = groq_counterfactual_alternatives(user_input, sso.redefined_problem)
+            if rejected:
+                self.counterfactual_log.add_entry(
+                    CounterfactualEntry(
+                        cycle_id=cycle_id,
+                        house="house_b",
+                        chosen_action=sso.redefined_problem[:1500],
+                        rejected_candidates=rejected,
+                        actual_outcome="",
+                        was_prediction_correct=None,
+                    )
+                )
 
         elapsed = time.perf_counter() - start
         logger.info(

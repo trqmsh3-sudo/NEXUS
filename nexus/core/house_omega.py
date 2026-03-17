@@ -29,6 +29,7 @@ from nexus.core.knowledge_graph import KnowledgeGraph
 from nexus.core.anti_belief import AntiBeliefGraph
 from nexus.core.bounty import BountySystem
 from nexus.core.skill_library import SkillLibrary
+from nexus.core.counterfactual import CounterfactualLog, groq_validate_rejected_prediction
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -122,6 +123,8 @@ class SystemHealth:
     system_score: float = 0.0
     total_skills: int = 0
     skills_used_this_cycle: int = 0
+    total_counterfactuals: int = 0
+    wrong_predictions: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise for reporting or persistence."""
@@ -143,6 +146,8 @@ class SystemHealth:
             "system_score": round(self.system_score, 4),
             "total_skills": self.total_skills,
             "skills_used_this_cycle": self.skills_used_this_cycle,
+            "total_counterfactuals": self.total_counterfactuals,
+            "wrong_predictions": self.wrong_predictions,
         }
 
 
@@ -191,12 +196,14 @@ class HouseOmega:
     bounty_system: BountySystem = field(default_factory=BountySystem, repr=False)
     conflict_alerts: list[dict[str, Any]] = field(default_factory=list, repr=False)
     skill_library: SkillLibrary = field(default_factory=SkillLibrary, repr=False)
+    counterfactual_log: CounterfactualLog = field(default_factory=CounterfactualLog, repr=False)
 
     def __post_init__(self) -> None:
         """Wire governor alert callback and skill library into Houses."""
         self.knowledge_graph.governor_alert = self._governor_conflict_alert
         self.house_b.skill_library = self.skill_library
         self.house_c.skill_library = self.skill_library
+        self.house_b.counterfactual_log = self.counterfactual_log
 
     # ------------------------------------------------------------------
     # 1. run  —  THE MAIN LOOP
@@ -254,7 +261,7 @@ class HouseOmega:
             bounty = self.bounty_system.get_bounty(task_key)
 
             # Step 1 — House B: redefine
-            sso = self.house_b.redefine(user_input)
+            sso = self.house_b.redefine(user_input, cycle_id=result.cycle_id)
             result.sso = sso
             logger.info("OMEGA step 1 complete  problem=%r", sso.redefined_problem[:80])
 
@@ -660,6 +667,8 @@ class HouseOmega:
 
         total_skills = len(self.skill_library.skills)
         skills_used_this_cycle = self.skill_library.usage_this_cycle
+        total_counterfactuals = len(self.counterfactual_log.entries)
+        wrong_predictions = self.counterfactual_log.wrong_predictions
 
         return SystemHealth(
             total_cycles=total,
@@ -676,6 +685,8 @@ class HouseOmega:
             system_score=round(score, 4),
             total_skills=total_skills,
             skills_used_this_cycle=skills_used_this_cycle,
+            total_counterfactuals=total_counterfactuals,
+            wrong_predictions=wrong_predictions,
         )
 
     # ------------------------------------------------------------------
@@ -781,14 +792,80 @@ class HouseOmega:
         except Exception as exc:
             logger.debug("Boundary pair recording failed (non-fatal): %s", exc)
 
+    def _run_background_counterfactual_check(self) -> None:
+        """Every 10 cycles: probe 2 rejected redefinitions via House D mini-cycle."""
+        pairs = self.counterfactual_log.pick_rejected_pairs(max_pairs=2)
+        for e, rc, idx in pairs:
+            self.counterfactual_log.mark_background_seen(e, idx)
+            action = (rc.get("action") or "")[:3000]
+            if not action.strip():
+                continue
+            pred = (rc.get("predicted_outcome") or "").lower()
+            try:
+                alt_sso = StructuredSpecificationObject(
+                    original_input=e.chosen_action[:500] or "counterfactual",
+                    redefined_problem=action,
+                    domain="General",
+                    confidence=0.5,
+                )
+                dr = self.house_d.attack_sso(alt_sso)
+                survived = dr.survived
+                predicted_failure = any(
+                    w in pred for w in ("fail", "reject", "destroy", "invalid", "weak")
+                )
+                predicted_success = any(
+                    w in pred for w in ("success", "pass", "survive", "work")
+                )
+                wrong = False
+                if predicted_failure and survived:
+                    wrong = True
+                elif predicted_success and not survived:
+                    wrong = True
+                if not wrong:
+                    g = groq_validate_rejected_prediction(
+                        e.actual_outcome or "unknown",
+                        action,
+                        rc.get("predicted_outcome", ""),
+                    )
+                    if g is False:
+                        wrong = True
+                if wrong:
+                    self.counterfactual_log.wrong_predictions += 1
+                    self.counterfactual_log.save()
+                    logger.warning(
+                        "COUNTERFACTUAL: prediction was wrong — updating world model  "
+                        "cycle_id=%s  action=%r",
+                        e.cycle_id,
+                        action[:80],
+                    )
+            except Exception as exc:
+                logger.debug("background counterfactual check failed: %s", exc)
+        if pairs:
+            self.counterfactual_log.save()
+
     def _finalise_cycle(self, result: CycleResult) -> None:
         """Post-cycle bookkeeping: increment counter, log, sleep/external check."""
         self.cycle_count += 1
         self._log_cycle(result)
+        actual = (
+            "SUCCESS: belief added"
+            if result.success
+            else f"FAILURE: {result.failure_reason or 'unknown'}"
+        )
+        try:
+            self.counterfactual_log.validate_predictions(result.cycle_id, actual)
+        except Exception as exc:
+            logger.debug("validate_predictions failed: %s", exc)
         try:
             self._record_boundary_pair(result)
         except Exception as exc:
             logger.debug("Boundary recording failed: %s", exc)
+
+        if self.cycle_count % 10 == 0:
+            try:
+                self._run_background_counterfactual_check()
+            except Exception as exc:
+                logger.debug("background counterfactual: %s", exc)
 
         if self.cycle_count % self.external_signal_interval == 0:
             self._inject_automatic_external_signal()

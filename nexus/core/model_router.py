@@ -38,6 +38,14 @@ if _gemini_key:
 else:
     logger.warning("GEMINI_API_KEY not set — Tier 0 Gemini models will be skipped.")
 
+# Groq API key (for direct Groq models via LiteLLM).
+_groq_key = os.getenv("GROQ_API_KEY")
+if _groq_key:
+    os.environ["GROQ_API_KEY"] = _groq_key
+    logger.info("Groq key loaded: %s...", _groq_key[:8])
+else:
+    logger.warning("GROQ_API_KEY not set — Groq models may not be usable.")
+
 # ------------------------------------------------------------------
 # Model tiers — cost-aware routing
 # ------------------------------------------------------------------
@@ -49,13 +57,13 @@ TIER_0_GEMINI_FREE: list[str] = [
     "gemini/gemini-2.5-pro",        # low free RPM, use sparingly
 ]
 
-# Tier 1 — OpenRouter free / very cheap defaults.
+# Tier 1 — free / very cheap defaults (OpenRouter + direct where appropriate).
 TIER_1_FREE: list[str] = [
-    # Cheap but reliable default for all Houses
+    "gemini/gemini-2.0-flash",      # direct Gemini
+    "groq/llama-3.3-70b-versatile", # Groq - fast + strong
+    "groq/llama-3.1-8b-instant",    # Groq - fastest
     "openrouter/google/gemini-2.5-flash",
-    # Verified working free models
     "openrouter/mistralai/mistral-small-3.1-24b-instruct:free",
-    "openrouter/liquid/lfm-7b:free",
 ]
 
 TIER_2_CHEAP: list[str] = [
@@ -85,6 +93,8 @@ MODEL_COSTS: dict[str, float] = {
     "gemini/gemini-2.0-flash": 0.0,
     "gemini/gemini-1.5-flash": 0.0,
     "gemini/gemini-2.5-pro": 0.0,  # treat as free for now (RPM-limited)
+    "groq/llama-3.3-70b-versatile": 0.0,
+    "groq/llama-3.1-8b-instant": 0.0,
     "openrouter/google/gemini-2.5-flash": 0.001,
     "openrouter/deepseek/deepseek-chat": 0.002,
     "openrouter/anthropic/claude-sonnet-4-5": 0.05,

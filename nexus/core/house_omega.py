@@ -103,6 +103,8 @@ class SystemHealth:
     successful_cycles: int = 0
     failed_cycles: int = 0
     total_beliefs: int = 0
+    self_built_beliefs: int = 0
+    autonomy_ratio: float = 0.0
     average_cycle_time: float = 0.0
     last_sleep_cycle: datetime | None = None
     next_sleep_cycle_due: datetime = field(
@@ -118,6 +120,8 @@ class SystemHealth:
             "successful_cycles": self.successful_cycles,
             "failed_cycles": self.failed_cycles,
             "total_beliefs": self.total_beliefs,
+            "self_built_beliefs": self.self_built_beliefs,
+            "autonomy_ratio": round(self.autonomy_ratio, 4),
             "average_cycle_time": round(self.average_cycle_time, 4),
             "last_sleep_cycle": (
                 self.last_sleep_cycle.isoformat()
@@ -477,6 +481,13 @@ class HouseOmega:
 
         score = successes / total if total > 0 else 0.0
 
+        total_beliefs = len(self.knowledge_graph)
+        self_built = sum(
+            1 for b in self.knowledge_graph.beliefs.values()
+            if b.source.startswith("nexus:house_c:artifact:")
+        )
+        autonomy_ratio = self_built / total_beliefs if total_beliefs > 0 else 0.0
+
         domains = list(self.knowledge_graph.domain_index.keys())
 
         remaining_cycles = self.sleep_cycle_interval - (
@@ -491,7 +502,9 @@ class HouseOmega:
             total_cycles=total,
             successful_cycles=successes,
             failed_cycles=failures,
-            total_beliefs=len(self.knowledge_graph),
+            total_beliefs=total_beliefs,
+            self_built_beliefs=self_built,
+            autonomy_ratio=round(autonomy_ratio, 4),
             average_cycle_time=round(avg_time, 4),
             last_sleep_cycle=self._last_sleep,
             next_sleep_cycle_due=next_sleep,

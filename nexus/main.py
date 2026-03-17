@@ -176,6 +176,7 @@ def _print_health(health: SystemHealth) -> None:
     print(f"  Failed:            {health.failed_cycles}")
     print(f"  System score:      {health.system_score:.2%}")
     print(f"  Total beliefs:     {health.total_beliefs}")
+    print(f"  Autonomy ratio:    {health.autonomy_ratio:.2%}")
     print(f"  Avg cycle time:    {health.average_cycle_time:.2f}s")
     print(f"  Domains:           {', '.join(health.domains_covered) or '(none)'}")
     if health.last_sleep_cycle:
@@ -260,11 +261,20 @@ def main() -> int:
     nexus = build_nexus()
 
     if len(sys.argv) > 1:
-        user_input = " ".join(sys.argv[1:])
-        _print_separator("SINGLE CYCLE")
-        print(f"\n  >>> Input: \"{user_input}\"")
-        result = nexus.run(user_input)
-        _print_cycle_result(1, result)
+        inputs = sys.argv[1:]
+        health_before = nexus.get_health()
+        _print_separator("AUTONOMY RATIO (BEFORE)")
+        print(f"  autonomy_ratio: {health_before.autonomy_ratio:.2%}")
+        print(f"  self_built_beliefs: {health_before.self_built_beliefs}")
+        print(f"  total_beliefs: {health_before.total_beliefs}")
+        print()
+
+        _print_separator("RUNNING CYCLES")
+        for i, user_input in enumerate(inputs, 1):
+            print(f"\n  >>> Cycle {i}: \"{user_input}\"")
+            result = nexus.run(user_input)
+            _print_cycle_result(i, result)
+
         _print_health(nexus.get_health())
         _print_separator("KNOWLEDGE GRAPH - FINAL STATE")
         if len(nexus.knowledge_graph) == 0:
@@ -285,8 +295,18 @@ def main() -> int:
     print(f"  Beliefs: {health.total_beliefs}")
     beliefs_added = sum(1 for c in nexus.cycle_history if c.belief_added)
     print(f"  Beliefs added this run: {beliefs_added}")
+    self_built_added = sum(
+        1 for c in nexus.cycle_history if c.belief_added
+    )  # each belief_added is a self-built artifact
+    print(f"  Self-built beliefs added: {self_built_added}")
+    print(f"  Autonomy ratio (after):  {health.autonomy_ratio:.2%}")
     total_time = sum(c.cycle_time_seconds for c in nexus.cycle_history)
     print(f"  Total cycle time: {total_time:.2f}s")
+    if len(sys.argv) > 1:
+        print(f"  Tasks succeeded: {sum(1 for c in nexus.cycle_history[-len(sys.argv[1:]):] if c.success)}/{len(sys.argv[1:])}")
+        for i, (inp, c) in enumerate(zip(sys.argv[1:], nexus.cycle_history[-len(sys.argv[1:]):]), 1):
+            status = "OK" if c.success else "FAILED"
+            print(f"    {i}. [{status}] {inp[:60]}...")
     print(f"  Domains: {', '.join(health.domains_covered) or '(none)'}")
     print()
 

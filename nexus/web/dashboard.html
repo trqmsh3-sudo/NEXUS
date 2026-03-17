@@ -798,9 +798,10 @@ html, body {
 
         html += '<div class="stat-grid">';
         html += statCard(d.total_cycles || 0, 'Total Cycles');
-        html += statCard((d.success_rate !== undefined ? Math.round(d.success_rate * 100) + '%' : '—'), 'Success Rate');
+        html += statCard((d.system_score !== undefined ? Math.round(d.system_score * 100) + '%' : '—'), 'Success Rate');
         html += statCard(d.total_beliefs || 0, 'Total Beliefs');
-        html += statCard(d.domains_covered || 0, 'Domains Covered');
+        html += statCard(Array.isArray(d.domains_covered) ? d.domains_covered.length : (d.domains_covered || 0), 'Domains Covered');
+        html += statCard((d.autonomy_ratio !== undefined ? Math.round(d.autonomy_ratio * 100) + '%' : '—'), 'Autonomy Ratio');
         html += '</div>';
 
         if (d.avg_cycle_time !== undefined) {

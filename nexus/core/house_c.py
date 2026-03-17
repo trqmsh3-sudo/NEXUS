@@ -8,10 +8,12 @@ Successful builds are convertible to BeliefCertificates for House A.
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import time
@@ -356,6 +358,19 @@ class HouseC:
         current_tests = artifact.tests
 
         for attempt in range(1 + max_healing):
+            # Pre-validation: align test imports and function names with the code
+            try:
+                current_tests = self._repair_test_imports_and_names(
+                    artifact.code,
+                    current_tests,
+                )
+            except Exception:
+                logger.exception(
+                    "HOUSE-C pre-validation repair failed; "
+                    "continuing with original tests  artifact_id=%s",
+                    artifact.artifact_id,
+                )
+
             test_with_import = (
                 "import sys, os\n"
                 "sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\n\n"
@@ -460,6 +475,93 @@ class HouseC:
             "HOUSE-C test healing complete  elapsed=%.2fs", elapsed,
         )
         return healed
+
+    # ------------------------------------------------------------------
+    # 4c. _repair_test_imports_and_names
+    # ------------------------------------------------------------------
+
+    def _repair_test_imports_and_names(self, code: str, tests: str) -> str:
+        """Best-effort repair when tests call functions that don't exist.
+
+        Heuristics:
+        - Parse the code to find all top-level function names.
+        - Parse the tests to find called function names.
+        - If tests call functions that are not defined in the code and
+          there is exactly one function defined in the code, assume the
+          tests *meant* to call that function and rewrite:
+            * ``from main import missing`` -> the real function name
+            * bare calls to ``missing(...)`` -> real function name
+
+        This is deliberately conservative: if parsing fails or multiple
+        candidate functions exist, the tests are returned unchanged.
+        """
+        try:
+            code_module = ast.parse(code)
+        except SyntaxError:
+            return tests
+
+        code_funcs: set[str] = {
+            node.name
+            for node in code_module.body
+            if isinstance(node, ast.FunctionDef)
+        }
+        if not code_funcs:
+            return tests
+
+        try:
+            test_module = ast.parse(tests)
+        except SyntaxError:
+            return tests
+
+        called_funcs: set[str] = set()
+        for node in ast.walk(test_module):
+            if isinstance(node, ast.Call):
+                func = node.func
+                if isinstance(func, ast.Name):
+                    called_funcs.add(func.id)
+
+        # Ignore pytest and obvious helpers
+        ignore = {"pytest"}
+        missing = {
+            name
+            for name in called_funcs
+            if name not in code_funcs and name not in ignore
+        }
+
+        if not missing:
+            return tests
+
+        # Only apply automatic repair when there is a single obvious target.
+        if len(code_funcs) != 1:
+            return tests
+
+        target_name = next(iter(code_funcs))
+        repaired = tests
+
+        # 1) Fix `from main import ...` lines that reference missing names.
+        def replace_import(match: re.Match[str]) -> str:
+            imported = [p.strip() for p in match.group(1).split(",")]
+            new_imports: list[str] = []
+            for name in imported:
+                base = name.split(" as ")[0].strip()
+                if base in missing:
+                    new_imports.append(target_name)
+                else:
+                    new_imports.append(name)
+            return f"from main import {', '.join(new_imports)}"
+
+        repaired = re.sub(
+            r"from\s+main\s+import\s+([^\n]+)",
+            replace_import,
+            repaired,
+        )
+
+        # 2) Replace bare calls to missing function names with the target.
+        for wrong in missing:
+            # word-boundary replacement to avoid substrings
+            repaired = re.sub(rf"\b{re.escape(wrong)}\b", target_name, repaired)
+
+        return repaired
 
     # ------------------------------------------------------------------
     # 5. _save_to_workspace

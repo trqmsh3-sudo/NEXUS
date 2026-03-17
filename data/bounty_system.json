@@ -1,0 +1,8 @@
+{
+  "bounties": {
+    "design a python function that checks if a string has balanced parentheses brackets and braces": 0.001
+  },
+  "failures": {
+    "design a python function that checks if a string has balanced parentheses brackets and braces": 0
+  }
+}

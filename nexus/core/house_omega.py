@@ -26,6 +26,8 @@ from nexus.core.house_b import HouseB, StructuredSpecificationObject
 from nexus.core.house_c import BuildResult, HouseC
 from nexus.core.house_d import DestructionReport, HouseD
 from nexus.core.knowledge_graph import KnowledgeGraph
+from nexus.core.anti_belief import AntiBeliefGraph
+from nexus.core.bounty import BountySystem
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -178,6 +180,8 @@ class HouseOmega:
         default_factory=lambda: datetime.now(timezone.utc),
     )
     _last_sleep: datetime | None = field(default=None, repr=False)
+    anti_beliefs: AntiBeliefGraph = field(default_factory=AntiBeliefGraph, repr=False)
+    bounty_system: BountySystem = field(default_factory=BountySystem, repr=False)
 
     # ------------------------------------------------------------------
     # 1. run  —  THE MAIN LOOP
@@ -217,6 +221,22 @@ class HouseOmega:
         )
 
         try:
+            # Anti-belief pre-check: build a minimal SSO-shaped object and ask if blocked.
+            pre_sso = StructuredSpecificationObject(
+                original_input=user_input,
+                redefined_problem=user_input,
+            )
+            if self.anti_beliefs.is_blocked(pre_sso):
+                result.failure_reason = "BLOCKED BY ANTI-BELIEF"
+                logger.warning("OMEGA cycle blocked by anti-belief graph  input=%r", user_input[:100])
+                result.cycle_time_seconds = time.perf_counter() - start
+                self._finalise_cycle(result)
+                return result
+
+            # Determine bounty for this task (for router tier control).
+            task_key = user_input.strip().lower()
+            bounty = self.bounty_system.get_bounty(task_key)
+
             # Step 1 — House B: redefine
             sso = self.house_b.redefine(user_input)
             result.sso = sso
@@ -267,6 +287,9 @@ class HouseOmega:
                     f"(score={sso_report.survival_score:.2f}, "
                     f"recommendation={sso_report.recommendation})"
                 )
+                # Record failure into anti-belief graph and bounty system.
+                self.anti_beliefs.add_failure(result)
+                self.bounty_system.record_failure(task_key)
                 result.cycle_time_seconds = time.perf_counter() - start
                 self._finalise_cycle(result)
                 return result
@@ -281,6 +304,8 @@ class HouseOmega:
 
             if not build_result.success:
                 result.failure_reason = "House C build failed validation"
+                self.anti_beliefs.add_failure(result)
+                self.bounty_system.record_failure(task_key)
                 result.cycle_time_seconds = time.perf_counter() - start
                 self._finalise_cycle(result)
                 return result
@@ -300,6 +325,8 @@ class HouseOmega:
                     f"Belief destroyed by House D "
                     f"(score={belief_report.survival_score:.2f})"
                 )
+                self.anti_beliefs.add_failure(result)
+                self.bounty_system.record_failure(task_key)
                 result.cycle_time_seconds = time.perf_counter() - start
                 self._finalise_cycle(result)
                 return result
@@ -311,6 +338,7 @@ class HouseOmega:
                 result.failure_reason = "House A rejected the belief"
             else:
                 result.success = True
+                self.bounty_system.record_success(task_key)
             logger.info("OMEGA step 6 complete  belief_added=%s", added)
 
         except Exception as exc:
@@ -389,6 +417,45 @@ class HouseOmega:
         if refreshed:
             self.knowledge_graph.inject_external_signal(refreshed)
 
+        # Chained inference: synthesise up to 5 new beliefs from pairs.
+        inferred = 0
+        max_inferred = 5
+        by_domain: dict[str, list[BeliefCertificate]] = {}
+        for b in self.knowledge_graph.beliefs.values():
+            if not b.is_valid() or b.is_expired():
+                continue
+            by_domain.setdefault(b.domain, []).append(b)
+
+        for domain, beliefs in by_domain.items():
+            if inferred >= max_inferred:
+                break
+            n = len(beliefs)
+            for i in range(n):
+                for j in range(i + 1, n):
+                    if inferred >= max_inferred:
+                        break
+                    b1, b2 = beliefs[i], beliefs[j]
+                    payload = self._synthesise_belief(b1, b2)
+                    if not payload or "claim" not in payload:
+                        continue
+                    candidate = BeliefCertificate(
+                        claim=payload["claim"],
+                        source="nexus:omega:inference",
+                        confidence=float(payload.get("confidence", 0.7)),
+                        contradictions=[],
+                        decay_rate=0.05,
+                        downstream_dependents=[],
+                        executable_proof=payload.get("executable_proof"),
+                        domain=payload.get("domain") or domain,
+                    )
+                    report = self.house_d.attack_belief(candidate)
+                    if not report.survived:
+                        continue
+                    added = self.knowledge_graph.add_belief(candidate)
+                    if added:
+                        inferred += 1
+
+
         self._last_sleep = datetime.now(timezone.utc)
         elapsed = time.perf_counter() - start
 
@@ -405,6 +472,33 @@ class HouseOmega:
             "contradictions": contradiction_count,
             "duration": round(elapsed, 4),
         }
+
+    def _synthesise_belief(
+        self,
+        b1: BeliefCertificate,
+        b2: BeliefCertificate,
+    ) -> dict[str, Any] | None:
+        """Ask House B's router to synthesise a higher-order belief from two inputs."""
+        system = (
+            "You are a knowledge synthesis engine.\n"
+            "Given two verified beliefs, generate ONE new higher-order belief that combines them.\n"
+            "Return strict JSON with keys: claim, domain, confidence, executable_proof.\n"
+            "The claim must be precise, falsifiable, and suitable for automated testing."
+        )
+        user_payload = {
+            "belief_1": {"claim": b1.claim, "domain": b1.domain},
+            "belief_2": {"claim": b2.claim, "domain": b2.domain},
+        }
+        try:
+            raw = self.house_b.router.complete(
+                house="house_b",
+                system=system,
+                user=json.dumps(user_payload, ensure_ascii=False),
+                label="inference",
+            )
+            return json.loads(raw)
+        except Exception:
+            return None
 
     # ------------------------------------------------------------------
     # 3. inject_external_knowledge

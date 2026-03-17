@@ -1,0 +1,8 @@
+{
+  "date": "2026-03-17",
+  "models": [
+    "gemini/gemini-1.5-flash",
+    "gemini/gemini-2.0-flash",
+    "gemini/gemini-2.5-pro"
+  ]
+}

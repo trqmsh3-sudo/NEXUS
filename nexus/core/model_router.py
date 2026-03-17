@@ -23,10 +23,33 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 litellm.suppress_debug_info = True
 
+# Ensure OpenRouter API key is present and propagated to litellm.
+_openrouter_key = os.getenv("OPENROUTER_API_KEY")
+if not _openrouter_key:
+    raise ValueError("OPENROUTER_API_KEY not set — required for ModelRouter")
+os.environ["OPENROUTER_API_KEY"] = _openrouter_key
+logger.info("OpenRouter key loaded: %s...", _openrouter_key[:8])
+
+# Gemini direct API key (used by litellm's Gemini backend).
+_gemini_key = os.getenv("GEMINI_API_KEY")
+if _gemini_key:
+    os.environ["GEMINI_API_KEY"] = _gemini_key
+    logger.info("Gemini key loaded: %s...", _gemini_key[:8])
+else:
+    logger.warning("GEMINI_API_KEY not set — Tier 0 Gemini models will be skipped.")
+
 # ------------------------------------------------------------------
 # Model tiers — cost-aware routing
 # ------------------------------------------------------------------
 
+# Tier 0 — direct Gemini free-tier models (used first when available).
+TIER_0_GEMINI_FREE: list[str] = [
+    "gemini/gemini-2.0-flash",      # 15 RPM free
+    "gemini/gemini-1.5-flash",      # 15 RPM free
+    "gemini/gemini-2.5-pro",        # low free RPM, use sparingly
+]
+
+# Tier 1 — OpenRouter free / very cheap defaults.
 TIER_1_FREE: list[str] = [
     # Cheap but reliable default for all Houses
     "openrouter/google/gemini-2.5-flash",
@@ -48,6 +71,7 @@ TIER_3_POWERFUL: list[str] = [
 MAX_DAILY_COST: float = 0.30  # USD
 _COST_FILE: pathlib.Path = pathlib.Path("data/daily_cost.json")
 _BLACKLIST_FILE: pathlib.Path = pathlib.Path("data/model_blacklist.json")
+_GEMINI_RL_FILE: pathlib.Path = pathlib.Path("data/gemini_rate_limits.json")
 
 OPENROUTER_HEADERS: dict[str, str] = {
     "HTTP-Referer": "https://github.com/trqmsh3-sudo/NEXUS",
@@ -55,6 +79,16 @@ OPENROUTER_HEADERS: dict[str, str] = {
 }
 
 _MIN_RESPONSE_CHARS: int = 10
+
+# Rough per-call costs used for budgeting and "cheapest available" selection.
+MODEL_COSTS: dict[str, float] = {
+    "gemini/gemini-2.0-flash": 0.0,
+    "gemini/gemini-1.5-flash": 0.0,
+    "gemini/gemini-2.5-pro": 0.0,  # treat as free for now (RPM-limited)
+    "openrouter/google/gemini-2.5-flash": 0.001,
+    "openrouter/deepseek/deepseek-chat": 0.002,
+    "openrouter/anthropic/claude-sonnet-4-5": 0.05,
+}
 
 
 @dataclass
@@ -89,6 +123,7 @@ class ModelRouter:
         user: str,
         label: str = "",
         max_tokens: int = 2000,
+        bounty_amount: float | None = None,
     ) -> str:
         """Send a chat completion through the best model for *house*.
 
@@ -120,17 +155,29 @@ class ModelRouter:
 
         over_budget = total_cost >= MAX_DAILY_COST
 
-        # Build tiered list per house, respecting budget.
+        # Build tiered list per house, respecting budget and bounty.
+        # Tier 0 (Gemini direct) is always attempted first when available
+        # and within per-minute rate limits.
+        base_models: list[str] = list(TIER_0_GEMINI_FREE)
+
         if over_budget:
-            models_to_try: list[str] = list(TIER_1_FREE)
+            base_models += list(TIER_1_FREE)
         else:
-            if house in {"house_b", "house_c", "house_d"}:
-                models_to_try = list(TIER_1_FREE) + list(TIER_2_CHEAP)
+            if bounty_amount is not None:
+                if bounty_amount < 0.005:
+                    base_models += list(TIER_1_FREE)
+                elif bounty_amount < 0.05:
+                    base_models += list(TIER_1_FREE) + list(TIER_2_CHEAP)
+                else:
+                    base_models += list(TIER_1_FREE) + list(TIER_2_CHEAP) + list(TIER_3_POWERFUL)
             else:
-                # Fallback for any future houses
-                models_to_try = list(TIER_2_CHEAP) + list(TIER_1_FREE)
-            # Tier 3 is only attempted when cheaper tiers fail.
-            models_to_try += list(TIER_3_POWERFUL)
+                if house in {"house_b", "house_c", "house_d"}:
+                    base_models += list(TIER_1_FREE) + list(TIER_2_CHEAP)
+                else:
+                    base_models += list(TIER_2_CHEAP) + list(TIER_1_FREE)
+                base_models += list(TIER_3_POWERFUL)
+
+        models_to_try: list[str] = base_models
 
         # De-duplicate while preserving order.
         seen: set[str] = set()
@@ -147,6 +194,16 @@ class ModelRouter:
 
         last_error: Exception | None = None
         for model in models_to_try:
+            # Respect Gemini per-minute rate limits before calling.
+            if model.startswith("gemini/") and not self._can_use_gemini(model):
+                logger.info(
+                    "ROUTER skip  house=%s  model=%s  label=%s  reason=gemini_rate_limit",
+                    house,
+                    model,
+                    label,
+                )
+                continue
+
             result = self._try_model(model, messages, max_tokens, house, label)
             if result is None:
                 # Increment failure counter and possibly blacklist.
@@ -277,6 +334,85 @@ class ModelRouter:
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("ROUTER blacklist save failed: %s", exc)
 
+    # ------------------------------------------------------------------
+    # Gemini rate limiting helpers
+    # ------------------------------------------------------------------
+
+    def _load_gemini_window(self) -> tuple[datetime, dict[str, int]]:
+        """Load current Gemini rate-limit window and per-model counts."""
+        now = datetime.now(timezone.utc)
+        try:
+            if _GEMINI_RL_FILE.exists():
+                raw = _GEMINI_RL_FILE.read_text(encoding="utf-8")
+                data = json.loads(raw or "{}")
+                window_start_raw = data.get("window_start")
+                if window_start_raw:
+                    window_start = datetime.fromisoformat(window_start_raw)
+                else:
+                    window_start = now
+                counters = {str(k): int(v) for k, v in (data.get("counters") or {}).items()}
+                return window_start, counters
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("ROUTER gemini RL load failed: %s", exc)
+        return now, {}
+
+    def _save_gemini_window(self, window_start: datetime, counters: dict[str, int]) -> None:
+        """Persist Gemini rate-limit window and counters."""
+        try:
+            _GEMINI_RL_FILE.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "window_start": window_start.isoformat(),
+                "counters": counters,
+            }
+            _GEMINI_RL_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("ROUTER gemini RL save failed: %s", exc)
+
+    def _can_use_gemini(self, model: str) -> bool:
+        """Return True if model is within per-minute Gemini limits and key is set."""
+        if not _gemini_key:
+            # No key: never use Gemini direct models.
+            return False
+
+        # Per-minute limits (RPM) for each Gemini model.
+        limits: dict[str, int] = {
+            "gemini/gemini-2.0-flash": 15,
+            "gemini/gemini-1.5-flash": 15,
+            "gemini/gemini-2.5-pro": 2,
+        }
+        max_rpm = limits.get(model)
+        if max_rpm is None:
+            # Unknown Gemini model: be conservative and allow it.
+            return True
+
+        window_start, counters = self._load_gemini_window()
+        now = datetime.now(timezone.utc)
+
+        # Reset window if more than 60 seconds have passed.
+        if (now - window_start).total_seconds() >= 60:
+            window_start = now
+            counters = {}
+
+        used = int(counters.get(model, 0))
+        if used >= max_rpm:
+            logger.info(
+                "ROUTER gemini RL hit  model=%s  used=%d  limit=%d",
+                model,
+                used,
+                max_rpm,
+            )
+            # Do not update counters/window; just signal caller to skip.
+            return False
+
+        # Within limit: increment and persist.
+        counters[model] = used + 1
+        self._save_gemini_window(window_start, counters)
+        return True
+
+    # ------------------------------------------------------------------
+    # Cost helpers
+    # ------------------------------------------------------------------
+
     @staticmethod
     def _estimate_cost(model: str) -> float:
         """Rough per-call cost estimate in USD based on tier.
@@ -284,6 +420,8 @@ class ModelRouter:
         This is deliberately conservative and does not attempt to model
         exact token usage. It is only used for coarse daily budgeting.
         """
+        if model in MODEL_COSTS:
+            return MODEL_COSTS[model]
         if model in TIER_1_FREE or model.endswith(":free"):
             return 0.0
         if model in TIER_2_CHEAP:

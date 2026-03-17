@@ -1,0 +1,57 @@
+[
+  {
+    "task_description": "input",
+    "domain": "Testing",
+    "keywords": [
+      "input"
+    ],
+    "error_trace": "SSO destroyed by House D after 0 refinement(s) (score=0.20, recommendation=REJECT)\n\nHouse C build failed validation\n\nBelief destroyed by House D (score=0.20)",
+    "approach_tried": "",
+    "failure_count": 3,
+    "created_at": "2026-03-17T19:21:30.314491+00:00"
+  },
+  {
+    "task_description": "test",
+    "domain": "Testing",
+    "keywords": [
+      "test"
+    ],
+    "error_trace": "SSO destroyed by House D after 3 refinement(s) (score=0.50, recommendation=REVISE)\n\nSSO destroyed by House D after 0 refinement(s) (score=0.20, recommendation=REJECT)\n\nSSO destroyed by House D after 1 refinement(s) (score=0.20, recommendation=REJECT)\n\nSSO destroyed by House D after 0 refinement(s) (score=0.50, recommendation=REVISE)",
+    "approach_tried": "",
+    "failure_count": 4,
+    "created_at": "2026-03-17T19:21:30.351718+00:00"
+  },
+  {
+    "task_description": "Design a thread-safe priority queue with dynamic resizing",
+    "domain": "Concurrent Data Structures",
+    "keywords": [
+      "design",
+      "thread",
+      "resizing",
+      "safe",
+      "dynamic",
+      "queue",
+      "priority"
+    ],
+    "error_trace": "SSO destroyed by House D after 3 refinement(s) (score=0.25, recommendation=REVISE)",
+    "approach_tried": "",
+    "failure_count": 1,
+    "created_at": "2026-03-17T20:23:10.536127+00:00"
+  },
+  {
+    "task_description": "Design a Python function for binary search with duplicates",
+    "domain": "Algorithm Design",
+    "keywords": [
+      "function",
+      "binary",
+      "duplicates",
+      "python",
+      "search",
+      "design"
+    ],
+    "error_trace": "House C build failed validation",
+    "approach_tried": "# NEXUS Build\ndef find_target_in_sorted_list(sorted_list, target):\n    \"\"\"\n    Locates an index of a target value within a sorted list using binary search.\n\n    Args:\n        sorted_list: A list of numbers sorted in ascending order.\n        target: The value to search for.\n\n    Returns:\n        An index of the target value if found, otherwise -1.\n    \"\"\"\n    left, right = 0, len(sorted_list) - 1\n\n    while left <= right:\n        mid = (left + right) // 2\n        if sorted_list[mid] == target:\n            return mid\n        elif sorted_list[mid] < target:\n            left = mid + 1\n        else:\n            right = mid - 1\n    return -1",
+    "failure_count": 1,
+    "created_at": "2026-03-17T20:25:01.927903+00:00"
+  }
+]

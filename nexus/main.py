@@ -4,18 +4,20 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import sys
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load .env from project root (one directory above this file)
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 # Ensure UTF-8 output on Windows
 if hasattr(sys.stdout, "buffer"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 if hasattr(sys.stderr, "buffer"):
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
-
-from dotenv import load_dotenv
-
-load_dotenv(Path(__file__).resolve().parent / ".env")
 
 from nexus.core.belief_certificate import BeliefCertificate  # noqa: E402
 from nexus.core.text_utils import clean_text

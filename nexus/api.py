@@ -14,7 +14,8 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-load_dotenv(Path(__file__).resolve().parent / ".env")
+# Load .env from project root (one directory above this file)
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from nexus.core.belief_certificate import BeliefCertificate
 from nexus.core.house_b import HouseB

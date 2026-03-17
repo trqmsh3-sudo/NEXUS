@@ -19,6 +19,7 @@ from typing import Any
 from nexus.core.belief_certificate import BeliefCertificate
 from nexus.core.knowledge_graph import KnowledgeGraph
 from nexus.core.model_router import ModelRouter
+from nexus.core.skill_library import SkillLibrary
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -225,6 +226,7 @@ class HouseB:
 
     knowledge_graph: KnowledgeGraph
     router: ModelRouter = field(default_factory=ModelRouter)
+    skill_library: SkillLibrary | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -254,6 +256,12 @@ class HouseB:
 
         knowledge_context = self._build_knowledge_context("General")
 
+        system = HOUSE_B_SYSTEM
+        if self.skill_library:
+            tools_text = self.skill_library.inject_into_prompt(user_input, max_k=3)
+            if tools_text:
+                system = system + "\n\nYou have these verified tools available:\n" + tools_text
+
         user_prompt = (
             f"Human input:\n{user_input}\n\n"
             f"Verified knowledge from the graph:\n{knowledge_context}\n\n"
@@ -261,7 +269,7 @@ class HouseB:
         )
 
         raw = self._call_llm(
-            system=HOUSE_B_SYSTEM,
+            system=system,
             user=user_prompt,
             label="redefine",
         )

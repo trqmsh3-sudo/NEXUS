@@ -28,6 +28,7 @@ from nexus.core.house_d import DestructionReport, HouseD
 from nexus.core.knowledge_graph import KnowledgeGraph
 from nexus.core.anti_belief import AntiBeliefGraph
 from nexus.core.bounty import BountySystem
+from nexus.core.skill_library import SkillLibrary
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -119,6 +120,8 @@ class SystemHealth:
     )
     domains_covered: list[str] = field(default_factory=list)
     system_score: float = 0.0
+    total_skills: int = 0
+    skills_used_this_cycle: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise for reporting or persistence."""
@@ -138,6 +141,8 @@ class SystemHealth:
             "next_sleep_cycle_due": self.next_sleep_cycle_due.isoformat(),
             "domains_covered": list(self.domains_covered),
             "system_score": round(self.system_score, 4),
+            "total_skills": self.total_skills,
+            "skills_used_this_cycle": self.skills_used_this_cycle,
         }
 
 
@@ -185,10 +190,13 @@ class HouseOmega:
     anti_beliefs: AntiBeliefGraph = field(default_factory=AntiBeliefGraph, repr=False)
     bounty_system: BountySystem = field(default_factory=BountySystem, repr=False)
     conflict_alerts: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    skill_library: SkillLibrary = field(default_factory=SkillLibrary, repr=False)
 
     def __post_init__(self) -> None:
-        """Wire governor alert callback so KnowledgeGraph can notify on CONFLICT."""
+        """Wire governor alert callback and skill library into Houses."""
         self.knowledge_graph.governor_alert = self._governor_conflict_alert
+        self.house_b.skill_library = self.skill_library
+        self.house_c.skill_library = self.skill_library
 
     # ------------------------------------------------------------------
     # 1. run  —  THE MAIN LOOP
@@ -222,6 +230,7 @@ class HouseOmega:
         """
         start = time.perf_counter()
         result = CycleResult(user_input=user_input)
+        self.skill_library.reset_usage_this_cycle()
         logger.info(
             "OMEGA cycle %d started  input=%r",
             self.cycle_count + 1, user_input[:100],
@@ -346,6 +355,9 @@ class HouseOmega:
             else:
                 result.success = True
                 self.bounty_system.record_success(task_key)
+                skill = self.skill_library.compile_from_belief(belief)
+                if skill:
+                    logger.info("OMEGA skill compiled and added to library  name=%s", skill.name)
             logger.info("OMEGA step 6 complete  belief_added=%s", added)
 
         except Exception as exc:
@@ -646,6 +658,9 @@ class HouseOmega:
             seconds=remaining_cycles * estimated_cycle_time,
         )
 
+        total_skills = len(self.skill_library.skills)
+        skills_used_this_cycle = self.skill_library.usage_this_cycle
+
         return SystemHealth(
             total_cycles=total,
             successful_cycles=successes,
@@ -659,6 +674,8 @@ class HouseOmega:
             next_sleep_cycle_due=next_sleep,
             domains_covered=domains,
             system_score=round(score, 4),
+            total_skills=total_skills,
+            skills_used_this_cycle=skills_used_this_cycle,
         )
 
     # ------------------------------------------------------------------

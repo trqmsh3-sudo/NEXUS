@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 .env
+**/.env
+**/.env.*
 data/builds/
 data/knowledge_store/
 data/cycle_history.json

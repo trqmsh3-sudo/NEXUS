@@ -1,19 +1,14 @@
-"""NEXUS core package — foundational data structures and engines."""
+"""NEXUS core package.
 
-from nexus.core.belief_certificate import BeliefCertificate
-from nexus.core.house_b import HouseB, MinorityReport, StructuredSpecificationObject
-from nexus.core.house_c import BuildArtifact, BuildResult, HouseC
-from nexus.core.house_d import (
-    AttackResult,
-    AttackType,
-    DestructionReport,
-    HouseD,
-)
-from nexus.core.house_omega import CycleResult, HouseOmega, SystemHealth
-from nexus.core.knowledge_graph import KnowledgeGraph
-from nexus.core.model_router import ModelRouter
-from nexus.core.external_signal import ExternalSignalProvider
-from nexus.core.persistence import PersistenceManager
+Keep this module import-safe (no environment-variable requirements).
+Heavy objects are available via lazy attribute access to avoid import-time
+side effects (e.g. ModelRouter requiring API keys).
+"""
+
+from __future__ import annotations
+
+from importlib import import_module
+from typing import Any
 
 __all__: list[str] = [
     "AttackResult",
@@ -35,3 +30,37 @@ __all__: list[str] = [
     "StructuredSpecificationObject",
     "SystemHealth",
 ]
+
+
+_LAZY: dict[str, tuple[str, str]] = {
+    "BeliefCertificate": ("nexus.core.belief_certificate", "BeliefCertificate"),
+    "KnowledgeGraph": ("nexus.core.knowledge_graph", "KnowledgeGraph"),
+    "PersistenceManager": ("nexus.core.persistence", "PersistenceManager"),
+    "ExternalSignalProvider": ("nexus.core.external_signal", "ExternalSignalProvider"),
+    "ModelRouter": ("nexus.core.model_router", "ModelRouter"),
+    "HouseB": ("nexus.core.house_b", "HouseB"),
+    "MinorityReport": ("nexus.core.house_b", "MinorityReport"),
+    "StructuredSpecificationObject": ("nexus.core.house_b", "StructuredSpecificationObject"),
+    "HouseC": ("nexus.core.house_c", "HouseC"),
+    "BuildArtifact": ("nexus.core.house_c", "BuildArtifact"),
+    "BuildResult": ("nexus.core.house_c", "BuildResult"),
+    "HouseD": ("nexus.core.house_d", "HouseD"),
+    "AttackResult": ("nexus.core.house_d", "AttackResult"),
+    "AttackType": ("nexus.core.house_d", "AttackType"),
+    "DestructionReport": ("nexus.core.house_d", "DestructionReport"),
+    "HouseOmega": ("nexus.core.house_omega", "HouseOmega"),
+    "CycleResult": ("nexus.core.house_omega", "CycleResult"),
+    "SystemHealth": ("nexus.core.house_omega", "SystemHealth"),
+}
+
+
+def __getattr__(name: str) -> Any:
+    target = _LAZY.get(name)
+    if not target:
+        raise AttributeError(name)
+    mod_name, attr = target
+    mod = import_module(mod_name)
+    value = getattr(mod, attr)
+    globals()[name] = value
+    return value
+

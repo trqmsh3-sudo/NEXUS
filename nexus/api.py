@@ -18,9 +18,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # Load .env from project root (one directory above this file)
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+# Do NOT override Render-provided environment variables.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
 
 from nexus.core.belief_certificate import BeliefCertificate
+from nexus.core import database as nexus_db
 from nexus.core.house_b import HouseB
 from nexus.core.house_c import HouseC
 from nexus.core.house_d import HouseD
@@ -39,6 +41,27 @@ _training_index: int = 0
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan context that runs background training."""
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_KEY")
+    logger.info("SUPABASE_URL: %s", (url or "NOT SET")[:20] if url else "NOT SET")
+    logger.info("SUPABASE_KEY: %s", (key or "NOT SET")[:8] if key else "NOT SET")
+
+    supabase_connected = False
+    supabase_beliefs = 0
+    if nexus_db.is_supabase_enabled():
+        db_rows = nexus_db.load_belief_dicts()
+        if db_rows is not None:
+            supabase_connected = True
+            supabase_beliefs = len(db_rows)
+    logger.info("Supabase connected: %s", "YES" if supabase_connected else "NO")
+    logger.info("Beliefs loaded: %d", len(graph.beliefs))
+    logger.info(
+        "Beliefs loaded: %d (knowledge_graph=%d, supabase=%d)",
+        graph.persistence.last_load_count,
+        len(graph.beliefs),
+        supabase_beliefs,
+    )
+
     task = asyncio.create_task(background_training())
     try:
         yield
@@ -102,7 +125,11 @@ starter_beliefs = [
         decay_rate=0.05,
     ),
 ]
-graph.inject_external_signal(starter_beliefs)
+for b in starter_beliefs:
+    # Avoid network side effects (semantic checks / LLM calls) at import-time.
+    if b.claim not in graph.beliefs:
+        graph.beliefs[b.claim] = b
+        graph._index_belief(b)
 
 
 class RunRequest(BaseModel):

@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
 
 _SINGLETON_ID = "singleton"
 
+url = os.getenv("SUPABASE_URL")
+key = os.getenv("SUPABASE_KEY")
+logger.info("SUPABASE_URL: %s", "SET" if url else "NOT SET")
+logger.info("SUPABASE_KEY: %s", "SET" if key else "NOT SET")
+
 
 def is_supabase_enabled() -> bool:
     url = (os.getenv("SUPABASE_URL") or "").strip()

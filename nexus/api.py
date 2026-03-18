@@ -21,6 +21,12 @@ from pydantic import BaseModel
 # Do NOT override Render-provided environment variables.
 load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
 
+# Explicit startup check (shows up in Render logs even if logging misconfigured)
+url = os.getenv("SUPABASE_URL")
+key = os.getenv("SUPABASE_KEY")
+print(f"=== SUPABASE_URL: {'SET' if url else 'NOT SET'} ===")
+print(f"=== SUPABASE_KEY: {'SET' if key else 'NOT SET'} ===")
+
 from nexus.core.belief_certificate import BeliefCertificate
 from nexus.core import database as nexus_db
 from nexus.core.house_b import HouseB

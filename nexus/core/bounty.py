@@ -4,8 +4,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict
 
-import json
 import logging
+
+from nexus.core import database as nexus_db
 
 logger = logging.getLogger(__name__)
 
@@ -18,28 +19,24 @@ class BountySystem:
     failures: Dict[str, int] = field(default_factory=dict)
     storage_path: str = "data/bounty_system.json"
 
+    def __post_init__(self) -> None:
+        self.load()
+
     # --------------- persistence ---------------
     def load(self) -> None:
-        path = Path(self.storage_path)
-        if not path.exists():
-            return
         try:
-            raw = path.read_text(encoding="utf-8")
-            data = json.loads(raw or "{}")
-            self.bounties = {k: float(v) for k, v in data.get("bounties", {}).items()}
-            self.failures = {k: int(v) for k, v in data.get("failures", {}).items()}
+            data = nexus_db.load_bounty_system(Path(self.storage_path))
+            self.bounties = dict(data.get("bounties") or {})
+            self.failures = dict(data.get("failures") or {})
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("BOUNTY load failed: %s", exc)
 
     def save(self) -> None:
-        path = Path(self.storage_path)
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            payload = {
-                "bounties": self.bounties,
-                "failures": self.failures,
-            }
-            path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            nexus_db.save_bounty_system(
+                {"bounties": self.bounties, "failures": self.failures},
+                Path(self.storage_path),
+            )
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("BOUNTY save failed: %s", exc)
 

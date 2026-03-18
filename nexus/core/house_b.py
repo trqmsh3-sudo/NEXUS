@@ -21,6 +21,7 @@ from nexus.core.knowledge_graph import KnowledgeGraph
 from nexus.core.model_router import ModelRouter
 from nexus.core.skill_library import SkillLibrary
 from nexus.core.counterfactual import CounterfactualEntry, CounterfactualLog, groq_counterfactual_alternatives
+from nexus.core.domain_normalizer import normalize_domain
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -467,30 +468,64 @@ class HouseB:
     # ------------------------------------------------------------------
 
     def _build_knowledge_context(self, domain: str) -> str:
-        """Build a context string from the top beliefs in the graph.
+        """Build context from domain-relevant, non-axiom beliefs only (FIX 6).
 
-        Queries ``knowledge_graph.query_domain`` for the given domain.
-        If fewer than 5 results, also pulls from all domains. The top
-        5 beliefs by confidence are formatted into a numbered list.
+        Founding axioms (``is_axiom``) never appear — they were skewing
+        House B (e.g. kill switch). Only beliefs whose normalized domain
+        matches the task domain are included.
 
         Args:
-            domain: Primary domain to query.
+            domain: Primary domain (e.g. from SSO).
 
         Returns:
-            A formatted multi-line string of verified beliefs, or
-            a fallback message when the graph is empty.
+            Up to 5 top beliefs by confidence, or a fallback when empty.
         """
-        beliefs: list[BeliefCertificate] = self.knowledge_graph.query_domain(domain)
+        nd = normalize_domain(domain)
 
-        if len(beliefs) < 5:
-            all_beliefs = list(self.knowledge_graph.beliefs.values())
-            seen_claims = {b.claim for b in beliefs}
-            for b in all_beliefs:
-                if b.claim not in seen_claims and b.is_valid() and not b.is_expired():
-                    beliefs.append(b)
-                    seen_claims.add(b.claim)
+        def _base_ok(b: BeliefCertificate) -> bool:
+            if getattr(b, "is_axiom", False):
+                return False
+            if not b.is_valid() or b.is_expired():
+                return False
+            if getattr(b, "quarantined", False):
+                return False
+            return True
 
-        top = sorted(beliefs, key=lambda b: b.confidence, reverse=True)[:5]
+        pool: list[BeliefCertificate] = []
+        seen: set[str] = set()
+
+        if nd == "General":
+            for b in sorted(
+                self.knowledge_graph.beliefs_snapshot(),
+                key=lambda x: x.confidence,
+                reverse=True,
+            ):
+                if not _base_ok(b):
+                    continue
+                pool.append(b)
+                if len(pool) >= 5:
+                    break
+        else:
+
+            def _same_domain(b: BeliefCertificate) -> bool:
+                return _base_ok(b) and normalize_domain(b.domain) == nd
+
+            for b in self.knowledge_graph.query_domain(domain):
+                if not _same_domain(b):
+                    continue
+                pool.append(b)
+                seen.add(b.claim)
+
+            if len(pool) < 5:
+                for b in self.knowledge_graph.beliefs_snapshot():
+                    if b.claim in seen or not _same_domain(b):
+                        continue
+                    pool.append(b)
+                    seen.add(b.claim)
+                    if len(pool) >= 5:
+                        break
+
+        top = sorted(pool, key=lambda b: b.confidence, reverse=True)[:5]
 
         if not top:
             return "(no verified knowledge available)"

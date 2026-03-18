@@ -266,7 +266,7 @@ class HouseD:
         all_attacks: list[AttackResult] = []
 
         contradictions = self.knowledge_graph.contradiction_check(
-            belief.claim, list(self.knowledge_graph.beliefs.values()),
+            belief.claim, self.knowledge_graph.beliefs_snapshot(),
         )
         if contradictions:
             all_attacks.append(AttackResult(

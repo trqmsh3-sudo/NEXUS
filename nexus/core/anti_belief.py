@@ -5,10 +5,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List
 
-import json
 import logging
 import re
 
+from nexus.core import database as nexus_db
 from nexus.core.house_b import StructuredSpecificationObject
 
 logger = logging.getLogger(__name__)
@@ -58,20 +58,15 @@ class AntiBeliefGraph:
 
     # ---------------- persistence -----------------
     def _load(self) -> None:
-        if not self._path.exists():
-            return
         try:
-            raw = self._path.read_text(encoding="utf-8")
-            data = json.loads(raw or "[]")
-            self._items = [AntiBeliefCertificate.from_dict(d) for d in data]
+            rows = nexus_db.load_anti_beliefs(self._path)
+            self._items = [AntiBeliefCertificate.from_dict(d) for d in rows]
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("ANTI-BELIEF load failed: %s", exc)
 
     def _save(self) -> None:
         try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            payload = [a.to_dict() for a in self._items]
-            self._path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            nexus_db.save_anti_beliefs([a.to_dict() for a in self._items], self._path)
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("ANTI-BELIEF save failed: %s", exc)
 

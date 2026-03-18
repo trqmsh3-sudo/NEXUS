@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from nexus.core import database as nexus_db
+
 logger: logging.Logger = logging.getLogger(__name__)
 
 
@@ -112,34 +114,25 @@ class CounterfactualLog:
 
     def save(self) -> None:
         try:
-            path = Path(self.storage_path)
-            path.parent.mkdir(parents=True, exist_ok=True)
             payload = {
                 "wrong_predictions": self.wrong_predictions,
                 "background_seen": sorted(self._background_seen),
                 "entries": [e.to_dict() for e in self.entries],
             }
-            path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
-        except OSError as exc:
+            nexus_db.save_counterfactuals(payload, Path(self.storage_path))
+        except Exception as exc:
             logger.warning("CounterfactualLog save failed: %s", exc)
 
     def load(self) -> None:
         try:
-            path = Path(self.storage_path)
-            if not path.exists():
-                return
-            raw = path.read_text(encoding="utf-8")
-            data = json.loads(raw or "{}")
-            if isinstance(data, list):
-                self.entries = [CounterfactualEntry.from_dict(x) for x in data if isinstance(x, dict)]
-                self.wrong_predictions = 0
-                return
+            data = nexus_db.load_counterfactuals(Path(self.storage_path))
             self.wrong_predictions = int(data.get("wrong_predictions", 0))
             self._background_seen = set(data.get("background_seen", []))
+            self.entries = []
             for item in data.get("entries", []):
                 if isinstance(item, dict):
                     self.entries.append(CounterfactualEntry.from_dict(item))
-        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        except (TypeError, ValueError) as exc:
             logger.warning("CounterfactualLog load failed: %s", exc)
 
 

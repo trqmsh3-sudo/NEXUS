@@ -46,10 +46,11 @@ class PersistenceManager:
         Args:
             graph: The KnowledgeGraph whose beliefs to persist.
         """
-        valid_beliefs = [
-            b for b in graph.beliefs.values()
-            if b.is_valid() and not b.is_expired()
-        ]
+        with graph._belief_lock:
+            valid_beliefs = [
+                b for b in graph.beliefs.values()
+                if b.is_valid() and not b.is_expired()
+            ]
         data = [b.to_dict() for b in valid_beliefs]
         if nexus_db.save_beliefs(data):
             logger.info(
@@ -86,9 +87,14 @@ class PersistenceManager:
 
     def load(self) -> list[BeliefCertificate]:
         """Load beliefs from Supabase (if configured) else JSON file."""
+        import sys
+
+        nexus_db.migrate_remove_unit_test_beliefs_once()
+
         path = Path(self.storage_path)
         loaded: list[BeliefCertificate] = []
         skipped = 0
+        _pytest = "pytest" in sys.modules or bool(os.getenv("PYTEST_CURRENT_TEST"))
 
         db_raw = nexus_db.load_belief_dicts()
         if db_raw is not None:
@@ -130,6 +136,9 @@ class PersistenceManager:
                 skipped += 1
                 continue
             if not belief.is_valid():
+                skipped += 1
+                continue
+            if belief.source == "unit-test" and not _pytest:
                 skipped += 1
                 continue
             loaded.append(belief)

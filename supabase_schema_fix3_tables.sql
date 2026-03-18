@@ -1,25 +1,6 @@
--- Run in Supabase: Dashboard → SQL → New query
--- Set NEXUS env: SUPABASE_URL + SUPABASE_KEY (service_role key recommended for server)
+-- FIX 3 — Run in Supabase SQL Editor if you already have beliefs/cycle_history/skills.
+-- (Or run full supabase_schema.sql which includes these.)
 
-CREATE TABLE IF NOT EXISTS beliefs (
-  claim_hash TEXT PRIMARY KEY,
-  data JSONB NOT NULL,
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS cycle_history (
-  id TEXT PRIMARY KEY,
-  entries JSONB NOT NULL DEFAULT '[]'::jsonb,
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS skills (
-  skill_id TEXT PRIMARY KEY,
-  data JSONB NOT NULL,
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- FIX 3: critical operational state (singleton rows, id = 'singleton')
 CREATE TABLE IF NOT EXISTS anti_beliefs (
   id TEXT PRIMARY KEY,
   data JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -56,11 +37,6 @@ CREATE TABLE IF NOT EXISTS bounty_system (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- If reads/writes from the anon key return fewer rows than Table Editor shows,
--- RLS is filtering. Either use service_role on the server, or (dev-only) disable RLS:
-ALTER TABLE beliefs DISABLE ROW LEVEL SECURITY;
-ALTER TABLE cycle_history DISABLE ROW LEVEL SECURITY;
-ALTER TABLE skills DISABLE ROW LEVEL SECURITY;
 ALTER TABLE anti_beliefs DISABLE ROW LEVEL SECURITY;
 ALTER TABLE counterfactuals DISABLE ROW LEVEL SECURITY;
 ALTER TABLE daily_cost DISABLE ROW LEVEL SECURITY;

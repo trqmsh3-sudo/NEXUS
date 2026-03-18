@@ -17,6 +17,7 @@ from typing import Any
 
 import litellm
 
+from nexus.core import database as nexus_db
 from nexus.core.text_utils import clean_text
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -301,24 +302,23 @@ class ModelRouter:
         return datetime.now(timezone.utc).date().isoformat()
 
     def _load_daily_cost(self) -> tuple[str, float]:
-        """Load the current daily cost tracking file."""
+        """Load daily cost from Supabase (if configured) else file."""
         try:
-            if _COST_FILE.exists():
-                raw = _COST_FILE.read_text(encoding="utf-8")
-                data = json.loads(raw or "{}")
-                date = str(data.get("date") or "")
-                total = float(data.get("total_cost") or 0.0)
-                return date, total
+            d = nexus_db.load_daily_cost(_COST_FILE)
+            date = str(d.get("date") or "")
+            total = float(d.get("total_cost") or 0.0)
+            return date, total
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("ROUTER cost load failed: %s", exc)
         return self._today_str(), 0.0
 
     def _save_daily_cost(self, date: str, total_cost: float) -> None:
-        """Persist the daily cost tracker to disk."""
+        """Persist daily cost to Supabase (if configured) else file."""
         try:
-            _COST_FILE.parent.mkdir(parents=True, exist_ok=True)
-            payload = {"date": date, "total_cost": round(total_cost, 6)}
-            _COST_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            nexus_db.save_daily_cost(
+                {"date": date, "total_cost": round(total_cost, 6)},
+                _COST_FILE,
+            )
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("ROUTER cost save failed: %s", exc)
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import pathlib
 import time
 import uuid
@@ -23,6 +24,7 @@ from nexus.core.external_signal import ExternalSignalProvider
 from nexus.core.house_b import HouseB, StructuredSpecificationObject
 from nexus.core.house_c import BuildArtifact, BuildResult, HouseC
 from nexus.core.house_d import AttackResult, DestructionReport, HouseD
+from nexus.core import database as nexus_db
 from nexus.core.database import load_cycle_history, save_cycle_history
 from nexus.core.knowledge_graph import KnowledgeGraph
 from nexus.core.anti_belief import AntiBeliefGraph
@@ -303,11 +305,17 @@ class HouseOmega:
         self.house_b.skill_library = self.skill_library
         self.house_c.skill_library = self.skill_library
         self.house_b.counterfactual_log = self.counterfactual_log
-        raw_hist = load_cycle_history(_HISTORY_PATH)
-        self.cycle_history = [
-            cycle_result_from_dict(x) for x in raw_hist if isinstance(x, dict)
-        ]
-        self.cycle_count = len(self.cycle_history)
+        # Under pytest, do not hydrate from global cycle history (would leak
+        # real runs into unit tests and break length assertions).
+        if os.getenv("PYTEST_CURRENT_TEST"):
+            self.cycle_history = []
+            self.cycle_count = 0
+        else:
+            raw_hist = load_cycle_history(_HISTORY_PATH)
+            self.cycle_history = [
+                cycle_result_from_dict(x) for x in raw_hist if isinstance(x, dict)
+            ]
+            self.cycle_count = len(self.cycle_history)
 
     # ------------------------------------------------------------------
     # 1. run  —  THE MAIN LOOP
@@ -489,11 +497,16 @@ class HouseOmega:
         logger.info("OMEGA light sleep started  cycle_count=%d", self.cycle_count)
 
         pruned = self.knowledge_graph.prune_expired()
+        rev = self.knowledge_graph.reverify_beliefs_past_due()
+        logger.info(
+            "OMEGA light sleep proof re-verify  checked=%d reverified=%d quarantined=%d",
+            rev.get("checked", 0),
+            rev.get("reverified", 0),
+            rev.get("quarantined", 0),
+        )
 
-        low_confidence = [
-            b for b in self.knowledge_graph.beliefs.values()
-            if b.confidence < 0.6
-        ]
+        snap = self.knowledge_graph.beliefs_snapshot()
+        low_confidence = [b for b in snap if b.confidence < 0.6]
         flagged = len(low_confidence)
         for b in low_confidence:
             logger.info(
@@ -502,9 +515,9 @@ class HouseOmega:
             )
 
         contradiction_count = 0
-        for b in list(self.knowledge_graph.beliefs.values()):
+        for b in snap:
             conflicts = self.knowledge_graph.contradiction_check(
-                b.claim, list(self.knowledge_graph.beliefs.values()),
+                b.claim, snap,
             )
             if conflicts:
                 contradiction_count += 1
@@ -548,7 +561,7 @@ class HouseOmega:
         contradiction_count = light_result["contradictions"]
 
         top_beliefs = sorted(
-            self.knowledge_graph.beliefs.values(),
+            self.knowledge_graph.beliefs_snapshot(),
             key=lambda b: b.confidence,
             reverse=True,
         )[:10]
@@ -577,7 +590,7 @@ class HouseOmega:
         inferred = 0
         max_inferred = 5
         by_domain: dict[str, list[BeliefCertificate]] = {}
-        for b in self.knowledge_graph.beliefs.values():
+        for b in self.knowledge_graph.beliefs_snapshot():
             if not b.is_valid() or b.is_expired():
                 continue
             by_domain.setdefault(b.domain, []).append(b)
@@ -737,7 +750,7 @@ class HouseOmega:
 
         total_beliefs = len(self.knowledge_graph)
         self_built = sum(
-            1 for b in self.knowledge_graph.beliefs.values()
+            1 for b in self.knowledge_graph.beliefs_snapshot()
             if b.source.startswith("nexus:house_c:artifact:")
         )
         autonomy_ratio = self_built / total_beliefs if total_beliefs > 0 else 0.0
@@ -746,16 +759,13 @@ class HouseOmega:
         daily_cost = 0.0
         cost_path = pathlib.Path("data/daily_cost.json")
         try:
-            if cost_path.exists():
-                raw = cost_path.read_text(encoding="utf-8")
-                data = json.loads(raw or "{}")
-                date_str = data.get("date") or ""
-                total_cost = float(data.get("total_cost") or 0.0)
-                if date_str:
-                    # Only report cost for the current UTC day.
-                    today = datetime.now(timezone.utc).date().isoformat()
-                    if date_str == today:
-                        daily_cost = total_cost
+            dc = nexus_db.load_daily_cost(cost_path)
+            date_str = str(dc.get("date") or "")
+            total_cost = float(dc.get("total_cost") or 0.0)
+            if date_str:
+                today = datetime.now(timezone.utc).date().isoformat()
+                if date_str == today:
+                    daily_cost = total_cost
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("HEALTH cost load failed: %s", exc)
 
@@ -837,18 +847,9 @@ class HouseOmega:
         self.conflict_alerts.append(payload)
         logger.warning("GOVERNOR CONFLICT ALERT: %s", payload)
         try:
-            _GOVERNOR_ALERTS_PATH.parent.mkdir(parents=True, exist_ok=True)
-            existing: list[dict[str, Any]] = []
-            if _GOVERNOR_ALERTS_PATH.exists():
-                raw = _GOVERNOR_ALERTS_PATH.read_text(encoding="utf-8")
-                try:
-                    existing = json.loads(raw or "[]")
-                except json.JSONDecodeError:
-                    pass
+            existing = nexus_db.load_governor_alerts(_GOVERNOR_ALERTS_PATH)
             existing.append({**payload, "timestamp": datetime.now(timezone.utc).isoformat()})
-            _GOVERNOR_ALERTS_PATH.write_text(
-                json.dumps(existing, indent=2, default=str), encoding="utf-8",
-            )
+            nexus_db.save_governor_alerts(existing, _GOVERNOR_ALERTS_PATH)
         except OSError as exc:
             logger.warning("Failed to persist governor alert: %s", exc)
 
@@ -881,18 +882,9 @@ class HouseOmega:
                 "minimal_flip_change": minimal_flip,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
-            _BOUNDARY_PATH.parent.mkdir(parents=True, exist_ok=True)
-            existing: list[dict[str, Any]] = []
-            if _BOUNDARY_PATH.exists():
-                raw_file = _BOUNDARY_PATH.read_text(encoding="utf-8")
-                try:
-                    existing = json.loads(raw_file or "[]")
-                except json.JSONDecodeError:
-                    pass
+            existing = nexus_db.load_boundary_pairs(_BOUNDARY_PATH)
             existing.append(pair)
-            _BOUNDARY_PATH.write_text(
-                json.dumps(existing, indent=2, default=str), encoding="utf-8",
-            )
+            nexus_db.save_boundary_pairs(existing, _BOUNDARY_PATH)
         except Exception as exc:
             logger.debug("Boundary pair recording failed (non-fatal): %s", exc)
 

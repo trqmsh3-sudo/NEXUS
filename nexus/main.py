@@ -90,6 +90,7 @@ def build_nexus() -> HouseOmega:
             domain="Software Engineering",
             executable_proof="print('clean')",
             decay_rate=0.05,
+            is_axiom=True,
         ),
         BeliefCertificate(
             claim="Tests must run before code is trusted",
@@ -98,6 +99,7 @@ def build_nexus() -> HouseOmega:
             domain="Software Engineering",
             executable_proof="assert True",
             decay_rate=0.05,
+            is_axiom=True,
         ),
         BeliefCertificate(
             claim="Every system needs a kill switch",
@@ -106,6 +108,7 @@ def build_nexus() -> HouseOmega:
             domain="System Architecture",
             executable_proof="assert True",
             decay_rate=0.05,
+            is_axiom=True,
         ),
     ]
 
@@ -316,7 +319,7 @@ def main() -> int:
     print()
 
     nexus.knowledge_graph.persistence.save(nexus.knowledge_graph)
-    saved = len([b for b in nexus.knowledge_graph.beliefs.values()
+    saved = len([b for b in nexus.knowledge_graph.beliefs_snapshot()
                  if b.is_valid() and not b.is_expired()])
     print(f"  Saved to disk: {saved} beliefs")
     print()

@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from unittest.mock import patch
 
 from nexus.core.belief_certificate import BeliefCertificate
 from nexus.core.house_a import AuditEntry, HouseA
@@ -118,6 +119,48 @@ class TestKnowledgeGraphAddBelief:
         cert = _make_cert(claim="good belief", confidence=0.9)
         assert graph.add_belief(cert) is True
         assert "good belief" in graph
+
+    @patch("nexus.core.knowledge_graph.run_executable_proof_in_subprocess")
+    def test_reject_when_subprocess_proof_fails(
+        self, mock_proof: object,
+    ) -> None:
+        mock_proof.return_value = (False, "proof failed")
+        graph = _make_graph()
+        assert graph.add_belief(_make_cert(claim="bad proof")) is False
+        assert "bad proof" not in graph
+
+    @patch("nexus.core.knowledge_graph.run_executable_proof_in_subprocess")
+    def test_subprocess_proof_sets_last_verified_at(
+        self, mock_proof: object,
+    ) -> None:
+        mock_proof.return_value = (True, "")
+        graph = _make_graph()
+        assert graph.add_belief(_make_cert(claim="verified")) is True
+        b = graph.get_belief("verified")
+        assert b is not None
+        assert b.last_verified_at is not None
+        assert b.verification_status == "VERIFIED"
+
+    def test_reverify_quarantines_and_governor_alert(self) -> None:
+        graph = _make_graph()
+        alerts: list[dict] = []
+        graph.governor_alert = lambda a: alerts.append(a)
+        assert graph.add_belief(_make_cert(claim="reverify-me")) is True
+        b = graph.get_belief("reverify-me")
+        assert b is not None
+        b.last_verified_at = datetime.now(timezone.utc) - timedelta(hours=25)
+
+        with patch(
+            "nexus.core.knowledge_graph.run_executable_proof_in_subprocess",
+            return_value=(False, "re-verify failed"),
+        ):
+            r = graph.reverify_beliefs_past_due()
+        assert r["quarantined"] == 1
+        b2 = graph.get_belief("reverify-me")
+        assert b2 is not None
+        assert b2.quarantined is True
+        assert b2.verification_status == "UNVERIFIED"
+        assert any(x.get("type") == "UNVERIFIED" for x in alerts)
 
     def test_reject_expired_belief(self) -> None:
         graph = _make_graph()
@@ -287,14 +330,14 @@ class TestKnowledgeGraphContradictionCheck:
         graph = _make_graph()
         existing = _make_cert(claim="X is true", contradictions=["X is false"])
         graph.add_belief(existing)
-        conflicts = graph.contradiction_check("X is false", list(graph.beliefs.values()))
+        conflicts = graph.contradiction_check("X is false", graph.beliefs_snapshot())
         assert "X is true" in conflicts
 
     def test_no_contradiction(self) -> None:
         graph = _make_graph()
         existing = _make_cert(claim="Y is true")
         graph.add_belief(existing)
-        conflicts = graph.contradiction_check("Z is true", list(graph.beliefs.values()))
+        conflicts = graph.contradiction_check("Z is true", graph.beliefs_snapshot())
         assert conflicts == []
 
 
@@ -477,8 +520,7 @@ class TestHouseA:
         # then add the contradiction reference.  We bypass the gate by writing
         # directly to beliefs so HouseA can test its own detection logic.
         contra = _make_cert(claim="A is false")
-        graph.beliefs[contra.claim] = contra
-        graph._index_belief(contra)
+        graph.register_belief_bypass_gates(contra)
 
         engine = HouseA(graph=graph)
         results = engine.detect_contradictions()

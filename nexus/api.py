@@ -60,11 +60,11 @@ async def lifespan(app: FastAPI):
             supabase_connected = True
             supabase_beliefs = len(db_rows)
     logger.info("Supabase connected: %s", "YES" if supabase_connected else "NO")
-    logger.info("Beliefs loaded: %d", len(graph.beliefs))
+    logger.info("Beliefs loaded: %d", len(graph))
     logger.info(
         "Beliefs loaded: %d (knowledge_graph=%d, supabase=%d)",
         graph.persistence.last_load_count,
-        len(graph.beliefs),
+        len(graph),
         supabase_beliefs,
     )
 
@@ -113,6 +113,7 @@ starter_beliefs = [
         domain="Software Engineering",
         executable_proof="print('clean')",
         decay_rate=0.05,
+        is_axiom=True,
     ),
     BeliefCertificate(
         claim="Tests must run before code is trusted",
@@ -121,6 +122,7 @@ starter_beliefs = [
         domain="Software Engineering",
         executable_proof="assert True",
         decay_rate=0.05,
+        is_axiom=True,
     ),
     BeliefCertificate(
         claim="Every system needs a kill switch",
@@ -129,13 +131,13 @@ starter_beliefs = [
         domain="System Architecture",
         executable_proof="assert True",
         decay_rate=0.05,
+        is_axiom=True,
     ),
 ]
 for b in starter_beliefs:
     # Avoid network side effects (semantic checks / LLM calls) at import-time.
-    if b.claim not in graph.beliefs:
-        graph.beliefs[b.claim] = b
-        graph._index_belief(b)
+    if b.claim not in graph:
+        graph.register_belief_bypass_gates(b)
 
 
 class RunRequest(BaseModel):
@@ -217,7 +219,7 @@ async def get_health() -> dict[str, Any]:
 @app.get("/api/beliefs")
 async def get_beliefs() -> list[dict[str, Any]]:
     """Return all beliefs in the knowledge graph."""
-    return [b.to_dict() for b in graph.beliefs.values()]
+    return [b.to_dict() for b in graph.beliefs_snapshot()]
 
 
 @app.get("/api/cycles")

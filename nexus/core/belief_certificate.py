@@ -32,7 +32,8 @@ class BeliefCertificate:
             A decay_rate of 0.0 means the knowledge never expires;
             1.0 means it expires almost immediately.
         created_at: UTC timestamp when the certificate was first created.
-        last_verified: UTC timestamp of the most recent verification.
+        last_verified: UTC timestamp used for TTL / decay (updated with proof).
+        last_verified_at: UTC timestamp of last successful subprocess proof run.
         downstream_dependents: IDs or descriptions of beliefs that
             logically depend on this certificate being valid.
         executable_proof: Optional Python code or test identifier that,
@@ -54,6 +55,10 @@ class BeliefCertificate:
     lessons_learned: list[str] = field(default_factory=list)
     semantic_triples: list[dict[str, Any]] = field(default_factory=list)
     conflict_flag: str | None = None  # e.g. "CONFLICT" when semantic clash detected
+    last_verified_at: datetime | None = None
+    quarantined: bool = False
+    verification_status: str = "UNVERIFIED"
+    is_axiom: bool = False
 
     def __post_init__(self) -> None:
         """Validate field constraints after initialisation."""
@@ -94,6 +99,18 @@ class BeliefCertificate:
         ttl_days: float = 365.0 * (1.0 - self.decay_rate)
         return elapsed_days > ttl_days
 
+    def proof_reverification_due(self, interval_hours: float = 24.0) -> bool:
+        """True if subprocess proof should be re-run (24h policy)."""
+        if not self.executable_proof or not str(self.executable_proof).strip():
+            return False
+        now = datetime.now(timezone.utc)
+        last = self.last_verified_at
+        if last is None:
+            last = self.last_verified
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        return (now - last).total_seconds() >= interval_hours * 3600.0
+
     def to_dict(self) -> dict[str, Any]:
         """Serialise this certificate to a plain dictionary.
 
@@ -110,7 +127,7 @@ class BeliefCertificate:
                 return [_clean(v) for v in val]
             return val
 
-        return {
+        out: dict[str, Any] = {
             "claim": _clean(self.claim),
             "source": _clean(self.source),
             "confidence": self.confidence,
@@ -125,7 +142,12 @@ class BeliefCertificate:
             "lessons_learned": _clean(list(self.lessons_learned)),
             "semantic_triples": list(self.semantic_triples),
             "conflict_flag": self.conflict_flag,
+            "quarantined": self.quarantined,
+            "verification_status": self.verification_status,
         }
+        if self.last_verified_at is not None:
+            out["last_verified_at"] = self.last_verified_at.isoformat()
+        return out
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> BeliefCertificate:
@@ -154,6 +176,17 @@ class BeliefCertificate:
         ]
         cf = data.get("conflict_flag")
         conflict_flag = str(cf) if cf else None
+        lv = datetime.fromisoformat(data["last_verified"])
+        lva_raw = data.get("last_verified_at")
+        last_verified_at = datetime.fromisoformat(lva_raw) if lva_raw else None
+        quarantined = bool(data.get("quarantined", False))
+        vs = data.get("verification_status")
+        if quarantined:
+            verification_status = "UNVERIFIED"
+        elif isinstance(vs, str) and vs in ("VERIFIED", "UNVERIFIED"):
+            verification_status = vs
+        else:
+            verification_status = "VERIFIED"
         return cls(
             claim=clean_text(data["claim"]),
             source=clean_text(data["source"]),
@@ -161,7 +194,7 @@ class BeliefCertificate:
             contradictions=[clean_text(c) for c in data.get("contradictions", [])],
             decay_rate=data.get("decay_rate", 0.0),
             created_at=datetime.fromisoformat(data["created_at"]),
-            last_verified=datetime.fromisoformat(data["last_verified"]),
+            last_verified=lv,
             downstream_dependents=[clean_text(d) for d in data.get("downstream_dependents", [])],
             executable_proof=clean_text(data["executable_proof"]) if data.get("executable_proof") else None,
             domain=clean_text(data.get("domain", "General")),
@@ -169,6 +202,10 @@ class BeliefCertificate:
             lessons_learned=lessons,
             semantic_triples=semantic_triples,
             conflict_flag=conflict_flag,
+            last_verified_at=last_verified_at,
+            quarantined=quarantined,
+            verification_status=verification_status,
+            is_axiom=bool(data.get("is_axiom", False)),
         )
 
     def __repr__(self) -> str:

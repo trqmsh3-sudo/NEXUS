@@ -79,7 +79,7 @@ class HouseA:
         Returns:
             List of pruned BeliefCertificates.
         """
-        expired = [b for b in self.graph.beliefs.values() if b.is_expired()]
+        expired = [b for b in self.graph.beliefs_snapshot() if b.is_expired()]
         self.graph.prune_expired()
         for cert in expired:
             self._log(
@@ -102,12 +102,11 @@ class HouseA:
         """
         results: list[tuple[BeliefCertificate, list[BeliefCertificate]]] = []
         for cert in self.graph:
-            live = [
-                self.graph.beliefs[c]
-                for c in cert.contradictions
-                if c in self.graph.beliefs
-                and self.graph.beliefs[c].is_valid()
-            ]
+            live = []
+            for c in cert.contradictions:
+                other = self.graph.get_belief(c)
+                if other is not None and other.is_valid():
+                    live.append(other)
             if live:
                 self._log(
                     "flagged",
@@ -156,7 +155,7 @@ class HouseA:
         decayed = self.propagate_decay()
 
         valid = [
-            b for b in self.graph.beliefs.values()
+            b for b in self.graph.beliefs_snapshot()
             if b.is_valid() and not b.is_expired()
         ]
 

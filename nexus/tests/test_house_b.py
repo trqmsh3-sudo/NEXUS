@@ -32,6 +32,8 @@ def _make_cert(
     claim: str = "test claim",
     confidence: float = 0.9,
     domain: str = "Testing",
+    *,
+    is_axiom: bool = False,
 ) -> BeliefCertificate:
     """Factory for valid test certificates."""
     return BeliefCertificate(
@@ -43,6 +45,7 @@ def _make_cert(
         last_verified=datetime.now(timezone.utc),
         executable_proof="assert True",
         domain=domain,
+        is_axiom=is_axiom,
     )
 
 
@@ -179,15 +182,27 @@ class TestBuildKnowledgeContext:
         assert len(lines) == 5
         assert "claim-7" in lines[0]
 
-    def test_mixes_domains_when_fewer_than_5(self) -> None:
+    def test_same_domain_only_no_cross_domain_fill(self) -> None:
         graph = _make_graph(
             _make_cert(claim="sec1", domain="Security"),
+            _make_cert(claim="sec2", domain="security"),
             _make_cert(claim="ml1", domain="ML"),
         )
         hb = HouseB(knowledge_graph=graph)
         ctx = hb._build_knowledge_context("Security")
         assert "sec1" in ctx
-        assert "ml1" in ctx
+        assert "sec2" in ctx
+        assert "ml1" not in ctx
+
+    def test_axioms_excluded_from_context(self) -> None:
+        graph = _make_graph(
+            _make_cert(claim="founding style", is_axiom=True),
+            _make_cert(claim="regular belief", is_axiom=False),
+        )
+        hb = HouseB(knowledge_graph=graph)
+        ctx = hb._build_knowledge_context("Testing")
+        assert "regular belief" in ctx
+        assert "founding style" not in ctx
 
 
 # ---------------------------------------------------------------------------

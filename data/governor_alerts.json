@@ -1,0 +1,184 @@
+[
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Design a robust, testable, and secure Python function that counts vowels in a string, including validation, error handling, and automated test cases to ensure correctness and reliability before deployment.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmpkm6215s2_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:43:20.921994+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Design a robust Python function that flattens a list by one level of nesting while ensuring correctness, security, and maintainability through comprehensive testing and validation.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmpm0qy62vi_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:43:24.205781+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Design a Python class Config that securely loads from a JSON file, supports nested keys with dot notation, validates required fields, and includes a kill switch mechanism for safety.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmpjm6vzjal_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:43:27.359716+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Design a robust, testable, and secure Python function to find the maximum value in a list of numbers, ensuring it adheres to software engineering best practices, including validation, error handling, and test coverage before deployment.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmp8lfxf0ce_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:43:30.663227+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Develop a robust, testable, and secure Python function to reverse a string, including validation for edge cases, input sanitization, and automated test coverage to ensure correctness and resilience before deployment.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmp9uy4284l_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:43:33.838452+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Design a robust, testable, and secure Python function that accurately counts the frequency of each word in a given text string while adhering to software engineering best practices, including input validation, edge case handling, and test coverage. Ensure the solution is maintainable, scalable, and integrates seamlessly into a larger system with potential kill-switch requirements.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmp5r0ao04w_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:43:37.115897+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Design a robust, testable, and secure Python function to determine if a given integer is prime, including validation for edge cases, performance considerations, and a suite of automated tests to verify correctness before deployment.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmprft8zghf_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:43:40.317065+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Develop a robust and reliable Python function to determine if a given string contains correctly matched and nested opening and closing parentheses '()', square brackets '[]', and curly braces '{}'.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmp4yowy2zj_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:43:43.245052+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Design a robust Python function `sum_digits(n: int) -> int` that correctly sums the digits of an integer while ensuring the solution is verifiable, secure, and maintainable through automated testing and input validation.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmps5gr3zr3_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:43:46.225818+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Design a secure, testable, and maintainable Python module that includes a function to add two numbers, along with a kill switch mechanism, comprehensive test coverage, and security considerations to ensure robustness and reliability in production environments.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmpkw0kt64n_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:43:49.428513+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Design a thread-safe Python class implementing the Token Bucket algorithm for rate limiting, ensuring accurate token consumption and refill based on elapsed time, while adhering to strict dependency constraints and implicit requirements for robustness and correctness.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmpn6_qw0ov_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:43:52.576999+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Develop a Python class that implements a cache data structure with support for both Least Recently Used (LRU) eviction and Time-To-Live (TTL) expiration mechanisms. The class should efficiently store and retrieve key-value pairs, automatically remove expired items, and evict the least recently used items when the cache reaches its capacity limit. The design must consider thread safety and provide a clear API for cache operations.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmpsv4wy94p_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:43:55.722016+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Develop a robust, testable, and secure Python function to convert Celsius to Fahrenheit, including validation, error handling, and automated test cases to ensure correctness and reliability before deployment.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmp0l098nst_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:43:58.948463+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Design a robust Python function that checks if a given string is a palindrome, ignoring spaces and case differences, while ensuring the solution is testable, maintainable, and adheres to software engineering best practices. Additionally, consider edge cases, performance, and potential security implications of string manipulation.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmpb8_lfmge_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:44:02.269761+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Design a thread-safe Python class implementing a practical and maintainable rate-limiting algorithm (Token Bucket variant) that balances precision, reliability, and simplicity for production use in multi-threaded environments. The solution must account for real-world clock limitations, avoid dependency risks, and prioritize deterministic testability while ensuring thread safety and long-term stability without drifting beyond acceptable tolerances.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmp3xhikufr_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:44:05.648914+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Develop a robust and user-friendly Python configuration management solution that can load settings from a JSON file, provide access to nested configuration values using a simple dot notation, and enforce the presence of critical configuration parameters to ensure application stability and security. The solution must also include a mechanism for graceful shutdown or 'kill switch' functionality, and all components must be thoroughly tested before deployment.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmp2wf9hdrm_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:44:08.955981+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Design a Python class called TokenBucket that enforces rate limiting using the token bucket algorithm, ensuring thread-safe token consumption and accurate refill based on elapsed time. The implementation must include mechanisms to handle edge cases like system clock adjustments and ensure deterministic behavior for testing. Additionally, the solution should be verifiable through unit tests before deployment.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmpdd_uf5qw_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:44:11.966174+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Design a production-ready, thread-safe rate limiting system that enforces per-user request quotas with time-window semantics, handles edge cases (clock skew, burst traffic, concurrent access), provides observability, includes graceful degradation mechanisms, and is testable under concurrent load",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmpe5yccerh_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:44:15.019212+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: To implement a high-performance, concurrent priority queue data structure that can dynamically adjust its capacity based on demand, ensuring data integrity and consistency across multiple threads, while also considering potential failure scenarios and incorporating robust testing methodologies.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmposf6ny0c_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:44:18.289769+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Design a thread-safe Python class implementing the Token Bucket algorithm for rate limiting, ensuring accurate token consumption and refill based on elapsed time, while adhering to strict dependency constraints and preparing for validation through automated tests.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmpa7ww818m_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:44:21.630832+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Develop a Python class that implements a Least Recently Used (LRU) cache, ensuring efficient storage and retrieval of key-value pairs while adhering to a specified capacity. The implementation must prioritize clarity, maintainability, and be accompanied by robust testing to guarantee correctness and performance under various access patterns.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmphxq3ybxj_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:44:24.940562+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Design a Python class MessageQueue that implements the producer-consumer pattern, is thread-safe, and enforces a dynamic max_size limit based on system load, ensuring it includes a secure kill switch mechanism for graceful shutdown with deadlock prevention, and is thoroughly tested with a focus on critical edge cases before deployment.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmp71q7a3a4_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:44:28.183155+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Design a thread-safe Python class implementing the Token Bucket algorithm for rate limiting, ensuring accurate token consumption and refill based on elapsed time, while adhering to strict dependency constraints and considering edge cases like system clock adjustments or high-frequency calls.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmp7c80u70o_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:44:31.500984+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Design a robust Python function `capitalize_words(s: str) -> str` that correctly capitalizes the first letter of each word in a string while ensuring the solution is testable, secure, and adheres to software engineering best practices, including edge-case handling and validation.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmp6uhq04a6_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:44:34.624655+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Develop a robust, efficient, and thread-safe Python class, `ConnectionPool`, that manages a pool of database connections. This class must adhere to a configurable maximum number of concurrently acquired connections (`max_acquired_connections`) and implement a proactive, asynchronous mechanism to identify and reclaim idle connections based on a configurable `idle_timeout`. The system must prioritize connection reuse to minimize overhead and optimize resource utilization. It must also include a 'kill switch' for graceful shutdown, ensuring all connections are properly closed and resources are released. The definition of 'active connection' is clarified to mean a connection currently leased out to a client. 'Properly released' for a database connection implies closing the connection object, ensuring any ongoing transactions are rolled back, and handling potential underlying driver-specific cleanup to prevent server-side resource leaks.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmp3wgmo905_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:44:38.042122+00:00"
+  },
+  {
+    "type": "UNVERIFIED",
+    "claim": "House C built working code for: Design a Python class MessageQueue implementing the producer-consumer pattern, ensuring thread-safety, enforcing a max_size limit, and incorporating a kill switch mechanism.",
+    "reason": "executable_proof re-verification failed",
+    "detail": "File \"C:\\Users\\maisi\\AppData\\Local\\Temp\\tmp0sth0c8u_nexus_proof.py\", line 1\n    ============================= test session starts =============================\n    ^^\nSyntaxError: invalid syntax",
+    "timestamp": "2026-03-19T10:44:41.555119+00:00"
+  }
+]

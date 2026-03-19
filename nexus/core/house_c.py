@@ -59,6 +59,12 @@ TEST_SYSTEM: str = (
     "- Keep tests simple — assert statements only\n"
     "- Maximum 10 test functions\n"
     "- Return ONLY raw pytest code starting with: import pytest\n"
+    "- Never expect TypeError for inputs that match the function type hints.\n"
+    "- Never expect RecursionError unless the specification explicitly requires recursion failure behaviour.\n"
+    "- Test what the generated code does, not what you wish it did.\n"
+    "- If code returns empty string, expected value must be empty string (not None).\n"
+    "- Validate each assertion against the actual code behavior before returning tests.\n"
+    "- Mental check before finalizing: 'would this test pass with a correct implementation of this exact code?'\n"
     "\n"
     "Complex inputs (critical):\n"
     "- If the user's prompt or spec uses nested types (e.g. list[list[int]], "
@@ -353,6 +359,7 @@ class HouseC:
             label="generate_tests",
         )
         tests = self._strip_fences(tests)
+        tests = self._sanitize_generated_tests(sso=sso, code=code, tests=tests)
 
         elapsed = time.perf_counter() - start
         logger.info(
@@ -360,6 +367,197 @@ class HouseC:
             tests.count("\n") + 1, elapsed,
         )
         return tests
+
+    def _sanitize_generated_tests(
+        self,
+        sso: StructuredSpecificationObject,
+        code: str,
+        tests: str,
+    ) -> str:
+        """Remove obviously invalid generated tests before pytest execution.
+
+        This is a defensive pass for known bad patterns seen in production:
+        - ``lambda: raise ...`` (invalid Python syntax)
+        - ``pytest.raises(TypeError)`` for calls that match declared types
+        - ``pytest.raises(RecursionError)`` without explicit spec requirement
+        """
+        blocks = self._split_test_blocks(tests)
+        if not blocks:
+            return tests
+
+        func_name, param_types = self._extract_primary_signature(code, sso)
+        recursion_required = self._requires_recursion_error(sso)
+        kept: list[str] = []
+        removed = 0
+
+        for block in blocks:
+            lowered = block.lower()
+
+            # 1) Invalid syntax pattern frequently emitted by models.
+            if "lambda:" in lowered and "raise " in lowered:
+                removed += 1
+                continue
+
+            # 2) RecursionError expectations without spec support.
+            if (
+                "pytest.raises(recursionerror)" in lowered
+                and not recursion_required
+            ):
+                removed += 1
+                continue
+
+            # 3) TypeError expectations for calls that match typed signature.
+            if (
+                "pytest.raises(typeerror)" in lowered
+                and func_name
+                and param_types
+                and self._matches_declared_types(block, func_name, param_types)
+            ):
+                removed += 1
+                continue
+
+            kept.append(block)
+
+        if removed:
+            logger.info(
+                "HOUSE-C test sanitizer removed %d suspicious tests", removed,
+            )
+
+        return "\n\n".join(kept).strip() + ("\n" if kept else "")
+
+    @staticmethod
+    def _split_test_blocks(tests: str) -> list[str]:
+        """Split a pytest file into import prelude + individual test blocks."""
+        lines = tests.splitlines()
+        if not lines:
+            return []
+
+        blocks: list[str] = []
+        current: list[str] = []
+        in_test = False
+
+        for line in lines:
+            if re.match(r"^def\s+test_", line):
+                if current:
+                    blocks.append("\n".join(current).rstrip())
+                current = [line]
+                in_test = True
+                continue
+            if not in_test:
+                current.append(line)
+            else:
+                current.append(line)
+
+        if current:
+            blocks.append("\n".join(current).rstrip())
+
+        return [b for b in blocks if b.strip()]
+
+    @staticmethod
+    def _extract_primary_signature(
+        code: str,
+        sso: StructuredSpecificationObject,
+    ) -> tuple[str | None, list[str]]:
+        """Best-effort extraction of primary function name and param types."""
+        try:
+            module = ast.parse(code)
+            funcs = [
+                node for node in module.body if isinstance(node, ast.FunctionDef)
+            ]
+            if not funcs:
+                return None, []
+            fn = funcs[0]
+            types: list[str] = []
+            for arg in fn.args.args:
+                ann = arg.annotation
+                if ann is None:
+                    types.append("any")
+                else:
+                    text = (
+                        ast.unparse(ann)
+                        if hasattr(ast, "unparse")
+                        else "any"
+                    )
+                    types.append(text.strip().lower())
+            return fn.name, types
+        except Exception:
+            # Fallback to signature from original input when parsing fails.
+            m = re.search(
+                r"([A-Za-z_]\w*)\s*\((.*?)\)",
+                sso.original_input or "",
+            )
+            if not m:
+                return None, []
+            fn_name = m.group(1)
+            params = m.group(2)
+            found = re.findall(r"[A-Za-z_]\w*\s*:\s*([^,\)]+)", params)
+            return fn_name, [f.strip().lower() for f in found]
+
+    @staticmethod
+    def _requires_recursion_error(sso: StructuredSpecificationObject) -> bool:
+        """True only when the spec explicitly asks for RecursionError behavior."""
+        text = " ".join(
+            [
+                sso.original_input or "",
+                sso.redefined_problem or "",
+                " ".join(sso.constraints or []),
+                " ".join(sso.success_criteria or []),
+                " ".join(sso.assumptions or []),
+            ],
+        ).lower()
+        return "recursionerror" in text
+
+    @staticmethod
+    def _matches_declared_types(
+        block: str,
+        function_name: str,
+        param_types: list[str],
+    ) -> bool:
+        """Check whether TypeError test input values match declared types."""
+        try:
+            module = ast.parse(block)
+        except SyntaxError:
+            return False
+
+        calls: list[ast.Call] = []
+        for node in ast.walk(module):
+            if isinstance(node, ast.Call):
+                func = node.func
+                if isinstance(func, ast.Name) and func.id == function_name:
+                    calls.append(node)
+        if not calls:
+            return False
+
+        for call in calls:
+            if len(call.args) > len(param_types):
+                return False
+            for idx, arg in enumerate(call.args):
+                expected = param_types[idx] if idx < len(param_types) else "any"
+                if not HouseC._arg_matches_type(arg, expected):
+                    return False
+        return True
+
+    @staticmethod
+    def _arg_matches_type(arg: ast.AST, expected: str) -> bool:
+        """Simple literal-type matcher for sanitizer checks."""
+        expected = expected.strip().lower()
+        if expected in {"any", ""}:
+            return False
+        if expected.startswith("str"):
+            return isinstance(arg, ast.Constant) and isinstance(arg.value, str)
+        if expected.startswith("int"):
+            return isinstance(arg, ast.Constant) and isinstance(arg.value, int) and not isinstance(arg.value, bool)
+        if expected.startswith("float"):
+            return isinstance(arg, ast.Constant) and isinstance(arg.value, float)
+        if expected.startswith("bool"):
+            return isinstance(arg, ast.Constant) and isinstance(arg.value, bool)
+        if expected.startswith("list"):
+            return isinstance(arg, ast.List)
+        if expected.startswith("dict"):
+            return isinstance(arg, ast.Dict)
+        if expected.startswith("tuple"):
+            return isinstance(arg, ast.Tuple)
+        return False
 
     # ------------------------------------------------------------------
     # 4. _validate

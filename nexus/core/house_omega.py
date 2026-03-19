@@ -15,6 +15,7 @@ import os
 import pathlib
 import time
 import uuid
+import gc
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -37,6 +38,41 @@ logger: logging.Logger = logging.getLogger(__name__)
 _HISTORY_PATH: pathlib.Path = pathlib.Path("data/cycle_history.json")
 _BOUNDARY_PATH: pathlib.Path = pathlib.Path("data/boundary_pairs.json")
 _GOVERNOR_ALERTS_PATH: pathlib.Path = pathlib.Path("data/governor_alerts.json")
+
+_MAX_CYCLE_HISTORY: int = 50  # memory guard: keep only last N cycles in RAM + persistence
+_MAX_LOG_CHARS: int = 4000    # trim large stdout/stderr/proofs stored on cycles
+
+
+def _rss_mb() -> float:
+    try:
+        import psutil
+        return round(psutil.Process().memory_info().rss / (1024 * 1024), 2)
+    except Exception:
+        return -1.0
+
+
+def _compact_cycle(result: "CycleResult") -> None:
+    """Trim heavy fields on build artifacts to prevent per-cycle memory growth."""
+    br = result.build_result
+    if not br or not getattr(br, "artifact", None):
+        return
+    art = br.artifact
+    # Keep only metadata required for debugging; drop big strings.
+    if isinstance(getattr(art, "code", None), str):
+        art.code = art.code[: min(len(art.code), _MAX_LOG_CHARS)]
+    if isinstance(getattr(art, "tests", None), str):
+        art.tests = art.tests[: min(len(art.tests), _MAX_LOG_CHARS)]
+    if isinstance(getattr(art, "documentation", None), str):
+        art.documentation = art.documentation[: min(len(art.documentation), _MAX_LOG_CHARS)]
+    if isinstance(getattr(art, "execution_proof", None), str) and art.execution_proof:
+        art.execution_proof = art.execution_proof[: min(len(art.execution_proof), _MAX_LOG_CHARS)]
+    # Validation errors can be huge (full pytest output); keep only a tail/head slice.
+    if isinstance(getattr(art, "validation_errors", None), list) and art.validation_errors:
+        trimmed: list[str] = []
+        for e in art.validation_errors[:3]:
+            if isinstance(e, str):
+                trimmed.append(e[: min(len(e), _MAX_LOG_CHARS)])
+        art.validation_errors = trimmed
 
 
 # ------------------------------------------------------------------
@@ -315,6 +351,11 @@ class HouseOmega:
             self.cycle_history = [
                 cycle_result_from_dict(x) for x in raw_hist if isinstance(x, dict)
             ]
+            # Memory guard: keep only last N cycles, and compact heavy artifact fields.
+            if len(self.cycle_history) > _MAX_CYCLE_HISTORY:
+                self.cycle_history = self.cycle_history[-_MAX_CYCLE_HISTORY:]
+            for c in self.cycle_history:
+                _compact_cycle(c)
             self.cycle_count = len(self.cycle_history)
 
     # ------------------------------------------------------------------
@@ -350,6 +391,7 @@ class HouseOmega:
         start = time.perf_counter()
         result = CycleResult(user_input=user_input)
         self.skill_library.reset_usage_this_cycle()
+        logger.info("MEM rss_mb=%.2f  stage=start", _rss_mb())
         logger.info(
             "OMEGA cycle %d started  input=%r",
             self.cycle_count + 1, user_input[:100],
@@ -829,6 +871,8 @@ class HouseOmega:
             result: The completed CycleResult to record.
         """
         self.cycle_history.append(result)
+        if len(self.cycle_history) > _MAX_CYCLE_HISTORY:
+            self.cycle_history = self.cycle_history[-_MAX_CYCLE_HISTORY:]
         logger.info(
             "OMEGA cycle logged  id=%s  success=%s  time=%.2fs  "
             "belief_added=%s  reason=%s",
@@ -941,6 +985,9 @@ class HouseOmega:
 
     def _finalise_cycle(self, result: CycleResult) -> None:
         """Post-cycle bookkeeping: increment counter, log, sleep/external check."""
+        # Trim heavy fields before storing in history/persistence.
+        _compact_cycle(result)
+        rss_before = _rss_mb()
         self.cycle_count += 1
         self._log_cycle(result)
         actual = (
@@ -979,6 +1026,15 @@ class HouseOmega:
             )
             self.run_light_sleep()
 
+        # Explicit GC to combat RSS growth on small dynos (requested).
+        gc.collect()
+        logger.info(
+            "MEM rss_mb=%.2f  stage=finalise  delta_mb=%.2f  history=%d",
+            _rss_mb(),
+            (_rss_mb() - rss_before) if rss_before >= 0 else 0.0,
+            len(self.cycle_history),
+        )
+
     def _inject_automatic_external_signal(self) -> None:
         """IRON LAW: Inject fresh external knowledge every N cycles."""
         try:
@@ -1009,7 +1065,7 @@ class HouseOmega:
     def _persist_history(self) -> None:
         """Persist cycle history to Supabase (if configured) or JSON file."""
         try:
-            data = [c.to_dict() for c in self.cycle_history]
+            data = [c.to_dict() for c in self.cycle_history[-_MAX_CYCLE_HISTORY:]]
             save_cycle_history(data, _HISTORY_PATH)
         except OSError as exc:
             logger.warning("Failed to persist cycle history: %s", exc)

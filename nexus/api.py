@@ -10,6 +10,11 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
+# STEP 3: at most one of (API run, background training) at a time; background skips if API active
+_training_semaphore: asyncio.Semaphore = asyncio.Semaphore(1)
+_BACKGROUND_MEMORY_LIMIT_BYTES: int = 250_000_000  # 250 MB — skip cycle if over
+_BACKGROUND_INTERVAL_SECONDS: float = 600.0  # 10 minutes
+
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -160,6 +165,20 @@ def _load_training_tasks() -> list[str]:
 
 def _run_one_training_cycle(task: str) -> None:
     """Run a single background training cycle on *task*."""
+    try:
+        import psutil
+        rss = psutil.Process().memory_info().rss
+        if rss > _BACKGROUND_MEMORY_LIMIT_BYTES:
+            logger.warning(
+                "Background training skipped — memory over limit "
+                "(rss=%.1f MB, limit=%.1f MB)",
+                rss / (1024 * 1024),
+                _BACKGROUND_MEMORY_LIMIT_BYTES / (1024 * 1024),
+            )
+            return
+    except Exception as exc:
+        logger.debug("psutil memory check failed (non-fatal): %s", exc)
+
     health_before = omega.get_health()
     if health_before.daily_cost >= MAX_DAILY_COST:
         logger.info(
@@ -184,20 +203,26 @@ def _run_one_training_cycle(task: str) -> None:
 
 
 async def background_training() -> None:
-    """Periodically run NEXUS training cycles while the server is running."""
+    """Periodically run NEXUS training cycles. Never runs during active /api/run (semaphore)."""
     global _training_index
     while True:
-        await asyncio.sleep(180)  # 3 minutes
+        await asyncio.sleep(_BACKGROUND_INTERVAL_SECONDS)  # 10 minutes
         try:
-            tasks = _load_training_tasks()
-            if not tasks:
-                logger.info("Background training: no training tasks found.")
+            try:
+                await asyncio.wait_for(_training_semaphore.acquire(), timeout=0.0)
+            except asyncio.TimeoutError:
                 continue
-            task = tasks[_training_index % len(tasks)]
-            _training_index += 1
-            await asyncio.to_thread(_run_one_training_cycle, task)
+            try:
+                tasks = _load_training_tasks()
+                if not tasks:
+                    logger.info("Background training: no training tasks found.")
+                    continue
+                task = tasks[_training_index % len(tasks)]
+                _training_index += 1
+                await asyncio.to_thread(_run_one_training_cycle, task)
+            finally:
+                _training_semaphore.release()
         except asyncio.CancelledError:
-            # Graceful shutdown.
             raise
         except Exception as exc:
             logger.error("Background training error: %s", exc)
@@ -205,8 +230,9 @@ async def background_training() -> None:
 
 @app.post("/api/run")
 async def run_cycle(req: RunRequest) -> dict[str, Any]:
-    """Execute a full NEXUS cycle."""
-    result = omega.run(req.user_input)
+    """Execute a full NEXUS cycle. Holds training semaphore so background does not run during cycle."""
+    async with _training_semaphore:
+        result = await asyncio.to_thread(omega.run, req.user_input)
     return result.to_dict()
 
 
@@ -214,6 +240,27 @@ async def run_cycle(req: RunRequest) -> dict[str, Any]:
 async def get_health() -> dict[str, Any]:
     """Return system health snapshot."""
     return omega.get_health().to_dict()
+
+
+@app.get("/api/memory")
+async def get_memory() -> dict[str, Any]:
+    """Return memory and cache stats (STEP 4). Targets: idle < 150MB, peak < 280MB, hard 300MB."""
+    rss_mb = 0.0
+    try:
+        import psutil
+        rss_mb = round(psutil.Process().memory_info().rss / (1024 * 1024), 2)
+    except Exception:
+        pass
+    stats = graph.get_cache_stats()
+    beliefs_supabase = 0
+    if nexus_db.is_supabase_enabled():
+        beliefs_supabase = nexus_db.count_beliefs()
+    return {
+        "rss_mb": rss_mb,
+        "beliefs_in_cache": stats["beliefs_in_cache"],
+        "beliefs_in_supabase": beliefs_supabase,
+        "cache_hit_rate": stats["cache_hit_rate"],
+    }
 
 
 @app.get("/api/beliefs")

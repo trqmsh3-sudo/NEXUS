@@ -192,14 +192,15 @@ class TestBuildGate:
             hc.build(_make_sso(), _failed_report())
 
     @patch("nexus.core.model_router.litellm")
-    @patch("nexus.core.house_c.subprocess.run")
+    @patch("nexus.core.house_c.subprocess.Popen")
     def test_accepts_survived_report(
-        self, mock_run: MagicMock, mock_litellm: MagicMock, tmp_path: Any,
+        self, mock_popen: MagicMock, mock_litellm: MagicMock, tmp_path: Any,
     ) -> None:
         mock_litellm.completion.return_value = _fake_response(SAMPLE_CODE)
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="all passed", stderr="",
-        )
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = ("all passed", "")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
 
         hc = HouseC(
             knowledge_graph=_make_graph(),
@@ -272,10 +273,11 @@ class TestValidate:
         )
         artifact = BuildArtifact(code=SAMPLE_CODE, tests=SAMPLE_TESTS)
 
-        with patch("nexus.core.house_c.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0, stdout="3 passed", stderr="",
-            )
+        with patch("nexus.core.house_c.subprocess.Popen") as mock_popen:
+            mock_proc = MagicMock()
+            mock_proc.communicate.return_value = ("3 passed", "")
+            mock_proc.returncode = 0
+            mock_popen.return_value = mock_proc
             result = hc._validate(artifact)
 
         assert result.passed_validation is True
@@ -290,14 +292,15 @@ class TestValidate:
         artifact = BuildArtifact(code="bad code", tests="bad tests")
 
         with (
-            patch("nexus.core.house_c.subprocess.run") as mock_run,
+            patch("nexus.core.house_c.subprocess.Popen") as mock_popen,
             patch("nexus.core.model_router.litellm") as mock_litellm,
         ):
+            mock_proc = MagicMock()
+            mock_proc.communicate.return_value = ("FAILED", "Error details")
+            mock_proc.returncode = 1
+            mock_popen.return_value = mock_proc
             mock_litellm.completion.return_value = _fake_response(
                 "def test_healed(): assert True",
-            )
-            mock_run.return_value = MagicMock(
-                returncode=1, stdout="FAILED", stderr="Error details",
             )
             result = hc._validate(artifact)
 
@@ -314,10 +317,11 @@ class TestValidate:
         )
         artifact = BuildArtifact(code="x=1", tests="pass")
 
-        with patch("nexus.core.house_c.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0, stdout="ok", stderr="",
-            )
+        with patch("nexus.core.house_c.subprocess.Popen") as mock_popen:
+            mock_proc = MagicMock()
+            mock_proc.communicate.return_value = ("ok", "")
+            mock_proc.returncode = 0
+            mock_popen.return_value = mock_proc
             hc._validate(artifact)
 
         build_dir = workspace / artifact.artifact_id
@@ -399,14 +403,15 @@ class TestFullPipeline:
     """End-to-end tests for the build pipeline."""
 
     @patch("nexus.core.model_router.litellm")
-    @patch("nexus.core.house_c.subprocess.run")
+    @patch("nexus.core.house_c.subprocess.Popen")
     def test_success_pipeline(
-        self, mock_run: MagicMock, mock_litellm: MagicMock, tmp_path: Any,
+        self, mock_popen: MagicMock, mock_litellm: MagicMock, tmp_path: Any,
     ) -> None:
         mock_litellm.completion.return_value = _fake_response(SAMPLE_CODE)
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="3 passed", stderr="",
-        )
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = ("3 passed", "")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
 
         hc = HouseC(
             knowledge_graph=_make_graph(),
@@ -421,14 +426,15 @@ class TestFullPipeline:
         assert mock_litellm.completion.call_count == 2
 
     @patch("nexus.core.model_router.litellm")
-    @patch("nexus.core.house_c.subprocess.run")
+    @patch("nexus.core.house_c.subprocess.Popen")
     def test_failed_validation_not_ready(
-        self, mock_run: MagicMock, mock_litellm: MagicMock, tmp_path: Any,
+        self, mock_popen: MagicMock, mock_litellm: MagicMock, tmp_path: Any,
     ) -> None:
         mock_litellm.completion.return_value = _fake_response(SAMPLE_CODE)
-        mock_run.return_value = MagicMock(
-            returncode=1, stdout="FAILED", stderr="err",
-        )
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = ("FAILED", "err")
+        mock_proc.returncode = 1
+        mock_popen.return_value = mock_proc
 
         hc = HouseC(
             knowledge_graph=_make_graph(),
@@ -440,14 +446,15 @@ class TestFullPipeline:
         assert result.ready_for_house_a is False
 
     @patch("nexus.core.model_router.litellm")
-    @patch("nexus.core.house_c.subprocess.run")
+    @patch("nexus.core.house_c.subprocess.Popen")
     def test_artifact_saved_to_workspace(
-        self, mock_run: MagicMock, mock_litellm: MagicMock, tmp_path: Any,
+        self, mock_popen: MagicMock, mock_litellm: MagicMock, tmp_path: Any,
     ) -> None:
         mock_litellm.completion.return_value = _fake_response(SAMPLE_CODE)
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="ok", stderr="",
-        )
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = ("3 passed", "")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
 
         hc = HouseC(
             knowledge_graph=_make_graph(),

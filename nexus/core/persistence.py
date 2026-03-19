@@ -40,12 +40,10 @@ class PersistenceManager:
     def save(self, graph: KnowledgeGraph) -> None:
         """Serialize valid, non-expired beliefs to JSON and save atomically.
 
-        Writes to a temp file in the same directory, then renames over
-        the target. Prevents partial writes from corrupting the store.
-
-        Args:
-            graph: The KnowledgeGraph whose beliefs to persist.
+        When Supabase is enabled, graph only holds LRU cache — do not overwrite DB.
         """
+        if nexus_db.is_supabase_enabled():
+            return
         with graph._belief_lock:
             valid_beliefs = [
                 b for b in graph.beliefs.values()

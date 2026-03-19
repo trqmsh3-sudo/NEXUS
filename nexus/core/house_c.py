@@ -27,7 +27,10 @@ from nexus.core.house_b import StructuredSpecificationObject
 from nexus.core.house_d import DestructionReport
 from nexus.core.knowledge_graph import KnowledgeGraph
 from nexus.core.model_router import ModelRouter
+from nexus.core.proof_runner import _subprocess_semaphore
 from nexus.core.skill_library import SkillLibrary
+
+PYTEST_TIMEOUT: int = 30
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -414,17 +417,35 @@ class HouseC:
                 attempt, artifact.artifact_id,
             )
 
-            result = subprocess.run(
-                [sys.executable, "-m", "pytest", "test_main.py", "-v", "--tb=short"],
-                capture_output=True,
-                text=True,
-                timeout=60,
-                cwd=str(build_dir),
-            )
+            stdout, stderr = "", ""
+            with _subprocess_semaphore:
+                proc = subprocess.Popen(
+                    [sys.executable, "-m", "pytest", "test_main.py", "-v", "--tb=short"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    cwd=str(build_dir),
+                )
+                try:
+                    stdout, stderr = proc.communicate(timeout=PYTEST_TIMEOUT)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+                    stdout, stderr = "", f"pytest timed out after {PYTEST_TIMEOUT}s"
+                if getattr(proc, "returncode", None) is None:
+                    try:
+                        proc.kill()
+                        proc.wait(timeout=5)
+                    except (OSError, subprocess.TimeoutExpired):
+                        pass
+            returncode = getattr(proc, "returncode", -1)
+            if returncode is None:
+                returncode = -1
+            out, err = stdout or "", stderr or ""
 
-            if result.returncode == 0:
+            if returncode == 0:
                 artifact.passed_validation = True
-                artifact.execution_proof = result.stdout
+                artifact.execution_proof = out
                 artifact.tests = current_tests
                 artifact.healing_attempts = attempt
                 logger.info(
@@ -434,7 +455,7 @@ class HouseC:
                 )
                 return artifact
 
-            pytest_output = (result.stdout + "\n" + result.stderr).strip()
+            pytest_output = (out + "\n" + err).strip()
 
             if attempt < max_healing:
                 logger.info(

@@ -197,6 +197,95 @@ def load_belief_dicts() -> list[dict[str, Any]] | None:
         return None
 
 
+def get_belief_by_claim(claim: str) -> dict[str, Any] | None:
+    """Fetch a single belief by claim from Supabase. Returns None if not found or Supabase disabled."""
+    if not is_supabase_enabled():
+        return None
+    try:
+        resp = (
+            _client()
+            .table("beliefs")
+            .select("data")
+            .eq("claim_hash", _claim_hash(claim))
+            .limit(1)
+            .execute()
+        )
+        rows = resp.data or []
+        if not rows or not isinstance(rows[0].get("data"), dict):
+            return None
+        return rows[0]["data"]
+    except Exception as exc:
+        logger.warning("DATABASE get_belief_by_claim failed: %s", exc)
+        return None
+
+
+def count_beliefs() -> int:
+    """Return total number of beliefs in Supabase. Returns 0 if Supabase disabled."""
+    if not is_supabase_enabled():
+        return 0
+    try:
+        resp = _client().table("beliefs").select("claim_hash", count="exact").execute()
+        return int(getattr(resp, "count", 0) or 0)
+    except Exception as exc:
+        logger.warning("DATABASE count_beliefs failed: %s", exc)
+        return 0
+
+
+def list_belief_dicts(
+    limit: int = 500,
+    domain: str | None = None,
+) -> list[dict[str, Any]]:
+    """List belief dicts from Supabase; optional domain filter in Python. Sorted by confidence desc."""
+    if not is_supabase_enabled():
+        return []
+    try:
+        resp = _client().table("beliefs").select("data").limit(min(limit, 1000)).execute()
+        rows = [r["data"] for r in (resp.data or []) if isinstance(r.get("data"), dict)]
+        if domain:
+            rows = [d for d in rows if (d.get("domain") or "") == domain]
+        rows.sort(key=lambda d: float(d.get("confidence") or 0), reverse=True)
+        return rows[:limit]
+    except Exception as exc:
+        logger.warning("DATABASE list_belief_dicts failed: %s", exc)
+        return []
+
+
+def upsert_belief(belief_dict: dict[str, Any]) -> bool:
+    """Upsert a single belief to Supabase. Returns True on success."""
+    if not is_supabase_enabled():
+        return False
+    claim = belief_dict.get("claim") or ""
+    if not claim:
+        return False
+    try:
+        _client().table("beliefs").upsert(
+            {"claim_hash": _claim_hash(claim), "data": belief_dict},
+        ).execute()
+        return True
+    except Exception as exc:
+        logger.warning("DATABASE upsert_belief failed: %s", exc)
+        return False
+
+
+def get_claims_contradictions() -> list[tuple[str, list[str]]]:
+    """Return (claim, contradictions) for all beliefs. Used for contradiction check without loading full graph."""
+    if not is_supabase_enabled():
+        return []
+    try:
+        resp = _client().table("beliefs").select("data").execute()
+        out: list[tuple[str, list[str]]] = []
+        for row in resp.data or []:
+            d = row.get("data")
+            if not isinstance(d, dict) or not d.get("claim"):
+                continue
+            cont = d.get("contradictions")
+            out.append((str(d["claim"]), list(cont) if isinstance(cont, list) else []))
+        return out
+    except Exception as exc:
+        logger.warning("DATABASE get_claims_contradictions failed: %s", exc)
+        return []
+
+
 # ---------------------------------------------------------------------------
 # Cycle history
 # ---------------------------------------------------------------------------

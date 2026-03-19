@@ -233,10 +233,10 @@ class TestHouseDParseJson:
         result = hd._parse_json('```json\n{"b": 2}\n```', label="test")
         assert result == {"b": 2}
 
-    def test_raises_on_garbage(self) -> None:
+    def test_fallback_empty_attacks_on_garbage(self) -> None:
         hd = HouseD(knowledge_graph=_make_graph())
-        with pytest.raises(ValueError, match="invalid JSON"):
-            hd._parse_json("totally broken {{{", label="test")
+        result = hd._parse_json("totally broken {{{", label="test")
+        assert result == {"attacks": []}
 
 
 # ---------------------------------------------------------------------------

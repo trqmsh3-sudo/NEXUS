@@ -363,7 +363,7 @@ class TestToBeliefCertificate:
         )
         cert = hc.to_belief_certificate(artifact)
         assert cert.confidence == 0.9
-        assert cert.executable_proof == "3 passed in 0.01s"
+        assert cert.executable_proof == "def fib(n): ..."
         assert cert.is_valid() is True
         assert "build fib" in cert.claim
 
@@ -382,11 +382,13 @@ class TestToBeliefCertificate:
         hc = HouseC(knowledge_graph=_make_graph())
         artifact = BuildArtifact(
             sso=_make_sso(domain="ML Architecture"),
+            code="x = 1\n",
             passed_validation=True,
             execution_proof="ok",
         )
         cert = hc.to_belief_certificate(artifact)
         assert cert.domain == "ML Architecture"
+        assert cert.executable_proof == "x = 1"
 
 
 # ---------------------------------------------------------------------------

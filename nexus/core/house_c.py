@@ -55,7 +55,19 @@ TEST_SYSTEM: str = (
     "- Test only functions that exist in the code\n"
     "- Keep tests simple — assert statements only\n"
     "- Maximum 10 test functions\n"
-    "- Return ONLY raw pytest code starting with: import pytest"
+    "- Return ONLY raw pytest code starting with: import pytest\n"
+    "\n"
+    "Complex inputs (critical):\n"
+    "- If the user's prompt or spec uses nested types (e.g. list[list[int]], "
+    "intervals as pairs, matrices), every test argument MUST match that shape.\n"
+    "- Example: intervals: list[list[int]] means a list of [start, end] pairs, "
+    "e.g. [[1,3],[2,6]] — never pass a flat list of ints or a single list where "
+    "a list-of-pairs is required.\n"
+    "- Invalid-input tests: only use shapes the spec allows (wrong pairs, empty "
+    "list, unsorted intervals). Do NOT pass strings, None, or scalars as "
+    "intervals unless the spec explicitly requires type-checking for those cases.\n"
+    "- Infer the function signature from original_input / the code under test; "
+    "import and call the exact name defined in main.py.\n"
 )
 
 
@@ -317,12 +329,19 @@ class HouseC:
         user_prompt = (
             f"Code to test:\n{code}\n\n"
             f"Specification:\n"
+            f"- Original user request (types & names): {sso.original_input!r}\n"
+            f"- Problem: {sso.redefined_problem}\n"
             f"- Domain: {sso.domain}\n"
-            f"- Success criteria: {json.dumps(sso.success_criteria)}\n\n"
+            f"- Required inputs: {json.dumps(sso.required_inputs)}\n"
+            f"- Expected outputs: {json.dumps(sso.expected_outputs)}\n"
+            f"- Success criteria: {json.dumps(sso.success_criteria)}\n"
+            f"- Assumptions: {json.dumps(sso.assumptions)}\n\n"
             "Write pytest tests that import from main and test "
             "the actual functions/classes defined above.\n"
             "Use only: from main import <name> for imports.\n"
-            "Cover happy path, edge cases, and error cases."
+            "Cover happy path and edge cases. Match argument types to "
+            "original_input (e.g. list-of-intervals = list of two-int lists).\n"
+            "Avoid tests that pass the wrong container shape for nested types."
         )
 
         tests = self._call_llm(
@@ -617,9 +636,9 @@ class HouseC:
             artifact: The BuildArtifact to convert.
 
         Returns:
-            A BeliefCertificate whose ``executable_proof`` is the
-            captured test output and whose confidence reflects
-            validation status.
+            A BeliefCertificate whose ``executable_proof`` is runnable
+            Python (the built source) so House A's proof subprocess can
+            execute it. Pytest stdout is kept on the artifact only.
         """
         confidence = 0.9 if artifact.passed_validation else 0.3
 
@@ -631,7 +650,7 @@ class HouseC:
             source=f"nexus:house_c:artifact:{artifact.artifact_id}",
             confidence=confidence,
             domain=artifact.sso.domain,
-            executable_proof=artifact.execution_proof,
+            executable_proof=(artifact.code or "").strip() or None,
             created_at=artifact.created_at,
             last_verified=datetime.now(timezone.utc),
         )

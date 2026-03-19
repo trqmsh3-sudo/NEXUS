@@ -328,9 +328,8 @@ class HouseD:
 
         Returns:
             List of :class:`AttackResult` objects found in this cycle.
-
-        Raises:
-            ValueError: If the LLM returns invalid JSON after one retry.
+            If JSON cannot be parsed, returns an empty list so the cycle
+            can continue.
         """
         start = time.perf_counter()
         logger.info("HOUSE-D cycle %d started", cycle_num)
@@ -477,10 +476,8 @@ class HouseD:
             label: Label for log and error messages.
 
         Returns:
-            The parsed dictionary.
-
-        Raises:
-            ValueError: If parsing fails after all repair attempts.
+            The parsed dictionary, or ``{\"attacks\": []}`` if parsing fails
+            after all repair attempts.
         """
         text = re.sub(r"```json|```", "", raw).strip()
 
@@ -509,6 +506,10 @@ class HouseD:
         except json.JSONDecodeError:
             pass
 
-        raise ValueError(
-            f"House D returned invalid JSON for '{label}' after all attempts. Raw: {raw[:300]}"
+        logger.warning(
+            "HOUSE-D JSON parse failed for %r after all repairs; "
+            "using empty attacks. Raw prefix: %r",
+            label,
+            raw[:200],
         )
+        return {"attacks": []}

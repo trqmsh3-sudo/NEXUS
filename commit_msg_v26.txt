@@ -1,1 +1,0 @@
-NEXUS v2.6 — fix test generation quality in House C

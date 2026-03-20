@@ -12,7 +12,7 @@ import os
 import pathlib
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import litellm
@@ -24,12 +24,15 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 litellm.suppress_debug_info = True
 
-# Ensure OpenRouter API key is present and propagated to litellm.
+# OpenRouter API key (optional at import; Tier 2 models skipped if missing).
 _openrouter_key = os.getenv("OPENROUTER_API_KEY")
-if not _openrouter_key:
-    raise ValueError("OPENROUTER_API_KEY not set — required for ModelRouter")
-os.environ["OPENROUTER_API_KEY"] = _openrouter_key
-logger.info("OpenRouter key loaded: %s...", _openrouter_key[:8])
+if _openrouter_key:
+    os.environ["OPENROUTER_API_KEY"] = _openrouter_key
+    logger.info("OpenRouter key loaded: %s...", _openrouter_key[:8])
+else:
+    logger.warning(
+        "OPENROUTER_API_KEY not set — OpenRouter models will be skipped.",
+    )
 
 # Gemini direct API key (used by litellm's Gemini backend).
 _gemini_key = os.getenv("GEMINI_API_KEY")
@@ -81,6 +84,11 @@ MAX_DAILY_COST: float = 0.30  # USD
 _COST_FILE: pathlib.Path = pathlib.Path("data/daily_cost.json")
 _BLACKLIST_FILE: pathlib.Path = pathlib.Path("data/model_blacklist.json")
 _GEMINI_RL_FILE: pathlib.Path = pathlib.Path("data/gemini_rate_limits.json")
+
+# Entries expire automatically so transient API errors do not block all day.
+_BLACKLIST_TTL_SECONDS: int = int(
+    os.getenv("NEXUS_MODEL_BLACKLIST_TTL_SECONDS", "3600"),
+)
 
 OPENROUTER_HEADERS: dict[str, str] = {
     "HTTP-Referer": "https://github.com/trqmsh3-sudo/NEXUS",
@@ -155,14 +163,11 @@ class ModelRouter:
         """
         today = self._today_str()
         cost_date, total_cost = self._load_daily_cost()
-        bl_date, blacklist = self._load_blacklist()
         if cost_date != today:
             cost_date, total_cost = today, 0.0
-        if bl_date != today:
-            # Reset blacklist daily
-            bl_date, blacklist = today, set()
-        # Cache blacklist in-memory for this session
-        self._blacklist = set(blacklist)
+        # TTL blacklist: prune expired entries on disk, cache active set
+        bl_entries = self._read_and_prune_blacklist_entries()
+        self._blacklist = set(bl_entries.keys())
 
         over_budget = total_cost >= MAX_DAILY_COST
 
@@ -197,6 +202,12 @@ class ModelRouter:
             if m and m not in seen and not seen.add(m)
             and m not in self._blacklist
         ]
+        if not _openrouter_key:
+            models_to_try = [
+                m for m in models_to_try if not m.startswith("openrouter/")
+            ]
+        if not _groq_key:
+            models_to_try = [m for m in models_to_try if not m.startswith("groq/")]
 
         messages: list[dict[str, str]] = [
             {"role": "system", "content": clean_text(system)},
@@ -221,10 +232,12 @@ class ModelRouter:
                 count = self._failure_counts.get(model, 0) + 1
                 self._failure_counts[model] = count
                 if count >= 2 and model not in self._blacklist:
-                    self._blacklist.add(model)
-                    self._save_blacklist(today, self._blacklist)
+                    self._blacklist_model(model)
                     logger.warning(
-                        "ROUTER blacklist  model=%s  failures=%d", model, count,
+                        "ROUTER blacklist  model=%s  failures=%d  ttl_s=%d",
+                        model,
+                        count,
+                        _BLACKLIST_TTL_SECONDS,
                     )
                 continue
             text = result.strip()
@@ -274,8 +287,12 @@ class ModelRouter:
             temperature=0.7,
         )
         if is_openrouter:
+            or_key = os.getenv("OPENROUTER_API_KEY")
+            if not or_key:
+                logger.info("ROUTER skip OpenRouter call — no API key")
+                return None
             kw["api_base"] = "https://openrouter.ai/api/v1"
-            kw["api_key"] = os.getenv("OPENROUTER_API_KEY")
+            kw["api_key"] = or_key
             kw["extra_headers"] = OPENROUTER_HEADERS
         try:
             logger.info("ROUTER call  house=%s  model=%s  label=%s", house, model, label)
@@ -322,27 +339,76 @@ class ModelRouter:
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("ROUTER cost save failed: %s", exc)
 
-    def _load_blacklist(self) -> tuple[str, set[str]]:
-        """Load the per-day model blacklist."""
+    def _read_and_prune_blacklist_entries(self) -> dict[str, datetime]:
+        """Load blacklist entries and drop those past ``expires_at`` (UTC)."""
+        now = datetime.now(timezone.utc)
+        if not _BLACKLIST_FILE.exists():
+            return {}
         try:
-            if _BLACKLIST_FILE.exists():
-                raw = _BLACKLIST_FILE.read_text(encoding="utf-8")
-                data = json.loads(raw or "{}")
-                date = str(data.get("date") or "")
-                models = set(data.get("models") or [])
-                return date, models
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("ROUTER blacklist load failed: %s", exc)
-        return self._today_str(), set()
+            raw_text = _BLACKLIST_FILE.read_text(encoding="utf-8")
+            data = json.loads(raw_text or "{}")
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("ROUTER blacklist read failed: %s", exc)
+            return {}
 
-    def _save_blacklist(self, date: str, models: set[str]) -> None:
-        """Persist the blacklist to disk."""
+        if isinstance(data.get("models"), list):
+            logger.info(
+                "ROUTER blacklist: retiring legacy list (%d models) → TTL entries",
+                len(data["models"]),
+            )
+            self._write_blacklist_entries({})
+            return {}
+
+        raw_entries: dict[str, str] = {
+            str(k): str(v)
+            for k, v in (data.get("entries") or {}).items()
+            if k and v
+        }
+        entries: dict[str, datetime] = {}
+        for model, iso in raw_entries.items():
+            try:
+                exp = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+                if exp.tzinfo is None:
+                    exp = exp.replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+            if exp > now:
+                entries[model] = exp
+
+        if len(entries) != len(raw_entries):
+            self._write_blacklist_entries(entries)
+        return entries
+
+    def _write_blacklist_entries(self, entries: dict[str, datetime]) -> None:
+        """Persist TTL blacklist (version 2)."""
         try:
             _BLACKLIST_FILE.parent.mkdir(parents=True, exist_ok=True)
-            payload = {"date": date, "models": sorted(models)}
-            _BLACKLIST_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("ROUTER blacklist save failed: %s", exc)
+            payload: dict[str, Any] = {
+                "version": 2,
+                "entries": {
+                    m: exp.isoformat()
+                    for m, exp in sorted(
+                        entries.items(),
+                        key=lambda kv: kv[0],
+                    )
+                },
+            }
+            _BLACKLIST_FILE.write_text(
+                json.dumps(payload, indent=2),
+                encoding="utf-8",
+            )
+        except OSError as exc:  # pragma: no cover - defensive
+            logger.warning("ROUTER blacklist write failed: %s", exc)
+
+    def _blacklist_model(self, model: str) -> None:
+        """Block *model* until TTL elapses (default 1 hour)."""
+        until = datetime.now(timezone.utc) + timedelta(
+            seconds=_BLACKLIST_TTL_SECONDS,
+        )
+        entries = self._read_and_prune_blacklist_entries()
+        entries[model] = until
+        self._write_blacklist_entries(entries)
+        self._blacklist.add(model)
 
     # ------------------------------------------------------------------
     # Gemini rate limiting helpers

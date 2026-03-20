@@ -2,7 +2,7 @@
 
 Keep this module import-safe (no environment-variable requirements).
 Heavy objects are available via lazy attribute access to avoid import-time
-side effects (e.g. ModelRouter requiring API keys).
+side effects where possible (ModelRouter logs if optional keys are missing).
 """
 
 from __future__ import annotations

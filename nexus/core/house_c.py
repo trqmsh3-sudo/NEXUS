@@ -299,7 +299,7 @@ class HouseC:
             f"Success criteria: {json.dumps(sso.success_criteria)}\n"
             f"Domain: {sso.domain}\n\n"
             "Write ONE Python file. The file will be saved as main.py.\n"
-            "If the problem needs a single function (e.g. add two numbers), write ONLY that function — no extra classes or helpers.\n"
+            "If the problem needs a single function (e.g. combine two integers), write ONLY that function — no extra classes or helpers.\n"
             "Keep it minimal. Use only Python standard library."
         )
 
@@ -385,7 +385,7 @@ class HouseC:
         if not blocks:
             return tests
 
-        func_name, param_types = self._extract_primary_signature(code, sso)
+        sigs = self._collect_top_level_signatures(code)
         recursion_required = self._requires_recursion_error(sso)
         kept: list[str] = []
         removed = 0
@@ -406,12 +406,12 @@ class HouseC:
                 removed += 1
                 continue
 
-            # 3) TypeError expectations for calls that match typed signature.
+            # 3) TypeError expectations for calls that match that call target's
+            #    own annotated signature (any top-level function in main.py).
             if (
                 "pytest.raises(typeerror)" in lowered
-                and func_name
-                and param_types
-                and self._matches_declared_types(block, func_name, param_types)
+                and sigs
+                and self._typeerror_block_expects_wrong_failure(block, sigs)
             ):
                 removed += 1
                 continue
@@ -454,21 +454,18 @@ class HouseC:
         return [b for b in blocks if b.strip()]
 
     @staticmethod
-    def _extract_primary_signature(
-        code: str,
-        sso: StructuredSpecificationObject,
-    ) -> tuple[str | None, list[str]]:
-        """Best-effort extraction of primary function name and param types."""
+    def _collect_top_level_signatures(code: str) -> dict[str, list[str]]:
+        """Map each top-level function name to lowercase annotation strings."""
+        out: dict[str, list[str]] = {}
         try:
             module = ast.parse(code)
-            funcs = [
-                node for node in module.body if isinstance(node, ast.FunctionDef)
-            ]
-            if not funcs:
-                return None, []
-            fn = funcs[0]
+        except SyntaxError:
+            return out
+        for node in module.body:
+            if not isinstance(node, ast.FunctionDef):
+                continue
             types: list[str] = []
-            for arg in fn.args.args:
+            for arg in node.args.args:
                 ann = arg.annotation
                 if ann is None:
                     types.append("any")
@@ -479,19 +476,58 @@ class HouseC:
                         else "any"
                     )
                     types.append(text.strip().lower())
-            return fn.name, types
-        except Exception:
-            # Fallback to signature from original input when parsing fails.
-            m = re.search(
-                r"([A-Za-z_]\w*)\s*\((.*?)\)",
-                sso.original_input or "",
-            )
-            if not m:
-                return None, []
-            fn_name = m.group(1)
-            params = m.group(2)
-            found = re.findall(r"[A-Za-z_]\w*\s*:\s*([^,\)]+)", params)
-            return fn_name, [f.strip().lower() for f in found]
+            out[node.name] = types
+        return out
+
+    @staticmethod
+    def _select_primary_function(
+        sso: StructuredSpecificationObject,
+        sigs: dict[str, list[str]],
+    ) -> tuple[str | None, list[str]]:
+        """Pick the function the user probably meant (not the first helper)."""
+        if not sigs:
+            return None, []
+        text = f"{sso.original_input or ''}\n{sso.redefined_problem or ''}"
+        ordered: list[str] = []
+        for pattern in (
+            r"function\s+([A-Za-z_]\w*)\s*\(",
+            r"def\s+([A-Za-z_]\w*)\s*\(",
+            r"\b([A-Za-z_]\w*)\s*\([^)]*\)\s*->",
+        ):
+            for m in re.finditer(pattern, text, flags=re.I):
+                ordered.append(m.group(1))
+        for name in ordered:
+            if name in sigs:
+                return name, sigs[name]
+        for name in sorted(sigs.keys(), key=lambda n: (-len(sigs[n]), n)):
+            if re.search(rf"\b{re.escape(name)}\b", text):
+                return name, sigs[name]
+        public = [(n, t) for n, t in sigs.items() if not n.startswith("_")]
+        if public:
+            best = max(public, key=lambda item: len(item[1]))
+            return best[0], best[1]
+        best = max(sigs.items(), key=lambda item: len(item[1]))
+        return best[0], best[1]
+
+    @staticmethod
+    def _extract_primary_signature(
+        code: str,
+        sso: StructuredSpecificationObject,
+    ) -> tuple[str | None, list[str]]:
+        """Best-effort extraction of primary function name and param types."""
+        sigs = HouseC._collect_top_level_signatures(code)
+        if sigs:
+            return HouseC._select_primary_function(sso, sigs)
+        m = re.search(
+            r"([A-Za-z_]\w*)\s*\((.*?)\)",
+            sso.original_input or "",
+        )
+        if not m:
+            return None, []
+        fn_name = m.group(1)
+        params = m.group(2)
+        found = re.findall(r"[A-Za-z_]\w*\s*:\s*([^,\)]+)", params)
+        return fn_name, [f.strip().lower() for f in found]
 
     @staticmethod
     def _requires_recursion_error(sso: StructuredSpecificationObject) -> bool:
@@ -508,34 +544,77 @@ class HouseC:
         return "recursionerror" in text
 
     @staticmethod
-    def _matches_declared_types(
+    def _context_is_pytest_raises_typeerror(expr: ast.AST) -> bool:
+        """True for ``pytest.raises(TypeError)`` / ``raises(TypeError)``."""
+        if not isinstance(expr, ast.Call):
+            return False
+        func = expr.func
+        if not isinstance(func, ast.Attribute) or func.attr != "raises":
+            return False
+        if not expr.args:
+            return False
+        return HouseC._expr_names_typeerror(expr.args[0])
+
+    @staticmethod
+    def _expr_names_typeerror(node: ast.AST) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id == "TypeError"
+        if isinstance(node, ast.Tuple):
+            return any(
+                isinstance(elt, ast.Name) and elt.id == "TypeError"
+                for elt in node.elts
+            )
+        return False
+
+    @staticmethod
+    def _call_matches_param_types(call: ast.Call, param_types: list[str]) -> bool:
+        """True if positional args look type-compatible with annotations."""
+        if len(call.args) > len(param_types):
+            return False
+        for idx, arg in enumerate(call.args):
+            expected = param_types[idx] if idx < len(param_types) else "any"
+            if not HouseC._arg_matches_type(arg, expected):
+                return False
+        return True
+
+    @staticmethod
+    def _typeerror_block_expects_wrong_failure(
         block: str,
-        function_name: str,
-        param_types: list[str],
+        sigs: dict[str, list[str]],
     ) -> bool:
-        """Check whether TypeError test input values match declared types."""
+        """Strip tests that expect TypeError for calls that match hints.
+
+        Models often emit ``with pytest.raises(TypeError): f(1, 2)`` even when
+        ``f`` takes ``int`` — those tests always fail.  We detect calls inside
+        the ``raises(TypeError)`` body and drop the whole test block when any
+        call matches that function's signature (per-function, not "first fn").
+        """
         try:
             module = ast.parse(block)
         except SyntaxError:
             return False
 
-        calls: list[ast.Call] = []
         for node in ast.walk(module):
-            if isinstance(node, ast.Call):
-                func = node.func
-                if isinstance(func, ast.Name) and func.id == function_name:
-                    calls.append(node)
-        if not calls:
-            return False
-
-        for call in calls:
-            if len(call.args) > len(param_types):
-                return False
-            for idx, arg in enumerate(call.args):
-                expected = param_types[idx] if idx < len(param_types) else "any"
-                if not HouseC._arg_matches_type(arg, expected):
-                    return False
-        return True
+            if not isinstance(node, ast.With):
+                continue
+            for item in node.items:
+                if not HouseC._context_is_pytest_raises_typeerror(
+                    item.context_expr,
+                ):
+                    continue
+                for stmt in node.body:
+                    for sub in ast.walk(stmt):
+                        if not isinstance(sub, ast.Call):
+                            continue
+                        fn = sub.func
+                        if not isinstance(fn, ast.Name):
+                            continue
+                        fname = fn.id
+                        if fname not in sigs:
+                            continue
+                        if HouseC._call_matches_param_types(sub, sigs[fname]):
+                            return True
+        return False
 
     @staticmethod
     def _arg_matches_type(arg: ast.AST, expected: str) -> bool:
@@ -595,6 +674,7 @@ class HouseC:
                 current_tests = self._repair_test_imports_and_names(
                     artifact.code,
                     current_tests,
+                    artifact.sso,
                 )
             except Exception:
                 logger.exception(
@@ -664,6 +744,11 @@ class HouseC:
                     artifact.code, current_tests, pytest_output,
                 )
                 current_tests = self._strip_fences(healed)
+                current_tests = self._sanitize_generated_tests(
+                    artifact.sso,
+                    artifact.code,
+                    current_tests,
+                )
             else:
                 artifact.passed_validation = False
                 artifact.validation_errors = [pytest_output]
@@ -730,7 +815,12 @@ class HouseC:
     # 4c. _repair_test_imports_and_names
     # ------------------------------------------------------------------
 
-    def _repair_test_imports_and_names(self, code: str, tests: str) -> str:
+    def _repair_test_imports_and_names(
+        self,
+        code: str,
+        tests: str,
+        sso: StructuredSpecificationObject | None = None,
+    ) -> str:
         """Best-effort repair when tests call functions that don't exist.
 
         Heuristics:
@@ -741,9 +831,11 @@ class HouseC:
           tests *meant* to call that function and rewrite:
             * ``from main import missing`` -> the real function name
             * bare calls to ``missing(...)`` -> real function name
+        - If multiple functions exist, use :meth:`_select_primary_function`
+          (SSO text + signatures) as the rewrite target for undefined names.
 
-        This is deliberately conservative: if parsing fails or multiple
-        candidate functions exist, the tests are returned unchanged.
+        This is deliberately conservative: if parsing fails or no target
+        is resolved, the tests are returned unchanged.
         """
         try:
             code_module = ast.parse(code)
@@ -781,11 +873,18 @@ class HouseC:
         if not missing:
             return tests
 
-        # Only apply automatic repair when there is a single obvious target.
-        if len(code_funcs) != 1:
+        target_name: str | None = None
+        if len(code_funcs) == 1:
+            target_name = next(iter(code_funcs))
+        elif sso is not None:
+            sigs = self._collect_top_level_signatures(code)
+            primary, _ = self._select_primary_function(sso, sigs)
+            if primary and primary in code_funcs and missing:
+                target_name = primary
+
+        if target_name is None:
             return tests
 
-        target_name = next(iter(code_funcs))
         repaired = tests
 
         # 1) Fix `from main import ...` lines that reference missing names.

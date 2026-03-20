@@ -156,6 +156,71 @@ class TestBuildResult:
 
 
 # ---------------------------------------------------------------------------
+# House C — test sanitizer & primary-function selection (v2.7)
+# ---------------------------------------------------------------------------
+
+class TestHouseCTestSanitizer:
+    """Regression: wrong first function must not break TypeError stripping."""
+
+    def test_primary_is_sso_named_not_first_helper(self) -> None:
+        code = (
+            "# NEXUS Build\n"
+            "def _helper():\n"
+            "    return 1\n\n"
+            "def is_even(n: int) -> bool:\n"
+            "    return n % 2 == 0\n"
+        )
+        sso = StructuredSpecificationObject(
+            original_input="Write a Python function is_even(n: int) -> bool",
+            redefined_problem="parity check",
+            assumptions=[],
+            constraints=[],
+            success_criteria=[],
+            required_inputs=[],
+            expected_outputs=[],
+            domain="General",
+            confidence=0.9,
+        )
+        name, types = HouseC._extract_primary_signature(code, sso)
+        assert name == "is_even"
+        assert types == ["int"]
+
+    def test_drops_typeerror_block_for_matching_callee(self) -> None:
+        code = (
+            "def helper():\n"
+            "    return 1\n\n"
+            "def is_even(n: int) -> bool:\n"
+            "    return n % 2 == 0\n"
+        )
+        sigs = HouseC._collect_top_level_signatures(code)
+        tests = (
+            "import pytest\n"
+            "from main import is_even\n\n"
+            "def test_bad_typeexpect():\n"
+            "    with pytest.raises(TypeError):\n"
+            "        is_even(4)\n\n"
+            "def test_ok():\n"
+            "    assert is_even(2) is True\n"
+        )
+        hc = HouseC(knowledge_graph=_make_graph())
+        sso = StructuredSpecificationObject(
+            original_input="is_even(n: int) -> bool",
+            redefined_problem="test",
+            assumptions=[],
+            constraints=[],
+            success_criteria=[],
+            required_inputs=[],
+            expected_outputs=[],
+            domain="General",
+            confidence=0.9,
+        )
+        out = hc._sanitize_generated_tests(sso, code, tests)
+        assert "test_bad_typeexpect" not in out
+        assert "test_ok" in out
+        assert "is_even(4)" not in out
+
+
+# ---------------------------------------------------------------------------
 # HouseC._strip_fences
 # ---------------------------------------------------------------------------
 

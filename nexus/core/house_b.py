@@ -52,18 +52,29 @@ def _normalize_three_success_criteria(
 # ------------------------------------------------------------------
 
 HOUSE_B_SYSTEM: str = (
-    "You are NEXUS House B. Your job is not to answer questions. "
-    "Your job is to understand what problem is ACTUALLY being asked, "
-    "which is almost never what the human said.\n"
+    "You are NEXUS House B. Your job is to restate the task as a single, "
+    "concrete, actionable instruction — not to design a system, framework, "
+    "or process.\n\n"
+    "CRITICAL RULES for redefined_problem:\n"
+    "- Must start with an action verb: Find, Search, Scrape, Identify, Locate, "
+    "Browse, Get, Fetch, Check.\n"
+    "- Must be a SINGLE concrete action, under 120 characters.\n"
+    "- Do NOT design a system, framework, architecture, or process.\n"
+    "- Do NOT use words like: systematic, tiered, scalable, robust, protocol, "
+    "adversarial, verification mechanism, continuous adaptation.\n"
+    "- GOOD: \"Find one paid freelance gig posted today on Upwork or HackerNews\"\n"
+    "- BAD:  \"Design a systematic process to identify and validate opportunities\"\n\n"
+    "If the input is 'find a gig' — output must be 'Find a gig on [specific site]'.\n"
+    "Keep it executable. House C will act on this directly.\n\n"
     "You have access to verified knowledge. Use it.\n"
     "Return ONLY valid JSON. No explanation. No markdown.\n\n"
     "The JSON must have exactly these keys:\n"
-    '  "redefined_problem": string,\n'
+    '  "redefined_problem": string — one concrete action verb phrase, under 120 chars,\n'
     '  "assumptions": [string, ...],\n'
     '  "constraints": [string, ...],\n'
     '  "success_criteria": EXACTLY 3 strings — each must be a MEASURABLE,\n'
-    "    testable criterion (what pytest or a human can verify), e.g.\n"
-    '    \"function returns True for valid input\", not vague goals.\n'
+    "    testable criterion (what a human can verify in under 60 seconds), e.g.\n"
+    '    \"At least one listing found with a stated rate\", not vague goals.\n'
     '  "required_inputs": [string, ...],\n'
     '  "expected_outputs": [string, ...],\n'
     '  "domain": string,\n'
@@ -280,6 +291,12 @@ class HouseB:
         parsed = self._parse_json(raw, label="redefine")
 
         rp = parsed.get("redefined_problem", user_input)
+        if self._is_system_design(rp):
+            logger.warning(
+                "HOUSE-B system-design detected in redefined_problem — "
+                "falling back to original input  problem=%r", rp[:120],
+            )
+            rp = user_input
         sc = _normalize_three_success_criteria(
             parsed.get("success_criteria", []),
             rp,
@@ -405,6 +422,32 @@ class HouseB:
             refined.domain, refined.confidence, elapsed,
         )
         return refined
+
+    # ------------------------------------------------------------------
+    # Private — System-design guard
+    # ------------------------------------------------------------------
+
+    _SYSTEM_DESIGN_PHRASES: frozenset[str] = frozenset([
+        "systematic process", "design a system", "design a framework",
+        "build an architecture", "tiered verification", "scalable monitoring",
+        "adversarial adaptation", "robust safety protocol", "continuous adaptation",
+        "verification mechanism", "implement a framework", "develop a scalable",
+        "design a systematic", "multi-tier", "continuous intelligence",
+    ])
+
+    @staticmethod
+    def _is_system_design(text: str) -> bool:
+        """Return True if *text* reads as a system/framework/process design
+        rather than a concrete, executable action.
+
+        Args:
+            text: The redefined_problem string to evaluate.
+
+        Returns:
+            True when system-design language is detected.
+        """
+        lower = text.lower()
+        return any(phrase in lower for phrase in HouseB._SYSTEM_DESIGN_PHRASES)
 
     # ------------------------------------------------------------------
     # Private — Minority Report

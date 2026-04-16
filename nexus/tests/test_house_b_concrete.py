@@ -124,6 +124,19 @@ class TestIsSystemDesign:
         text = "Develop a scalable monitoring system with robust safety protocols"
         assert HouseB._is_system_design(text) is True
 
+    def test_detects_design_a_process(self):
+        text = "Design a process to systematically evaluate paid opportunities"
+        assert HouseB._is_system_design(text) is True
+
+    def test_detects_systematically_evaluate(self):
+        text = "Design a process to systematically evaluate and document online paid opportunities"
+        assert HouseB._is_system_design(text) is True
+
+    def test_detects_over_length_as_system_design(self):
+        """Anything over 160 chars is almost certainly over-engineered."""
+        text = "Find one paid gig " + ("x" * 150)  # clearly too long
+        assert HouseB._is_system_design(text) is True
+
     def test_concrete_find_task_is_not_system_design(self):
         text = "Find one paid freelance gig on Upwork or Fiverr"
         assert HouseB._is_system_design(text) is False

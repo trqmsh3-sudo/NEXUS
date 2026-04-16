@@ -398,6 +398,12 @@ class HouseB:
         parsed = self._parse_json(raw, label="refine")
 
         rp2 = parsed.get("redefined_problem", sso.redefined_problem)
+        if self._is_system_design(rp2):
+            logger.warning(
+                "HOUSE-B system-design detected in refined problem — "
+                "falling back to original input  problem=%r", rp2[:120],
+            )
+            rp2 = sso.original_input
         sc2 = _normalize_three_success_criteria(
             parsed.get("success_criteria", sso.success_criteria),
             rp2,
@@ -428,11 +434,25 @@ class HouseB:
     # ------------------------------------------------------------------
 
     _SYSTEM_DESIGN_PHRASES: frozenset[str] = frozenset([
-        "systematic process", "design a system", "design a framework",
-        "build an architecture", "tiered verification", "scalable monitoring",
-        "adversarial adaptation", "robust safety protocol", "continuous adaptation",
-        "verification mechanism", "implement a framework", "develop a scalable",
-        "design a systematic", "multi-tier", "continuous intelligence",
+        # Process/framework design verbs
+        "design a process", "design a system", "design a framework",
+        "design a mechanism", "design an approach",
+        "build an architecture", "build a system", "build a framework",
+        "implement a framework", "implement a system", "implement a process",
+        "develop a scalable", "develop a system", "develop a process",
+        "create a framework", "create a system", "create a process",
+        "establish a process", "establish a framework",
+        # Abstract system adjectives
+        "systematic process", "design a systematic", "systematically evaluate",
+        "tiered verification", "tiered approach", "tiered system",
+        "scalable monitoring", "scalable system",
+        "adversarial adaptation", "continuous adaptation", "continuous intelligence",
+        "robust safety protocol", "robust protocol",
+        "verification mechanism", "verification framework",
+        "multi-tier", "multi-layered",
+        # Over-engineering signals
+        "confidence score", "risk assessment matrix", "audit trail",
+        "documentation includes", "evaluation framework",
     ])
 
     @staticmethod
@@ -440,12 +460,18 @@ class HouseB:
         """Return True if *text* reads as a system/framework/process design
         rather than a concrete, executable action.
 
+        Catches both exact-phrase matches and over-length responses —
+        concrete action tasks rarely need more than 120 characters.
+
         Args:
             text: The redefined_problem string to evaluate.
 
         Returns:
             True when system-design language is detected.
         """
+        # Length guard: concrete tasks fit in ~120 chars
+        if len(text) > 160:
+            return True
         lower = text.lower()
         return any(phrase in lower for phrase in HouseB._SYSTEM_DESIGN_PHRASES)
 

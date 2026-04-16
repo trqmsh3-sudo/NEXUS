@@ -40,6 +40,7 @@ from nexus.core.house_d import HouseD
 from nexus.core.house_omega import HouseOmega
 from nexus.core.knowledge_graph import KnowledgeGraph
 from nexus.core.model_router import MAX_DAILY_COST, ModelRouter
+from nexus.core.openclaw_client import OpenClawClient
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)-8s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -98,7 +99,11 @@ os.makedirs("data/builds", exist_ok=True)
 graph = KnowledgeGraph()
 router = ModelRouter()
 house_b = HouseB(knowledge_graph=graph, router=router)
-house_c = HouseC(knowledge_graph=graph, router=router)
+_openclaw_url = os.getenv("OPENCLAW_URL", "http://host.docker.internal:18789")
+_openclaw_token = os.getenv("OPENCLAW_TOKEN")
+_openclaw_client = OpenClawClient(base_url=_openclaw_url, token=_openclaw_token)
+logger.info("OpenClawClient configured: url=%s available=%s", _openclaw_url, _openclaw_client.is_available())
+house_c = HouseC(knowledge_graph=graph, router=router, openclaw_client=_openclaw_client)
 house_d = HouseD(knowledge_graph=graph, router=router, min_cycles=1)
 
 omega = HouseOmega(

@@ -144,6 +144,7 @@ class BeliefCertificate:
             "conflict_flag": self.conflict_flag,
             "quarantined": self.quarantined,
             "verification_status": self.verification_status,
+            "is_axiom": self.is_axiom,
         }
         if self.last_verified_at is not None:
             out["last_verified_at"] = self.last_verified_at.isoformat()

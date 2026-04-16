@@ -1,7 +1,7 @@
-"""Model Router — routes LLM calls via Mistral, Groq, and OpenRouter.
+"""Model Router — routes LLM calls via DeepSeek, Gemini, Groq, and OpenRouter.
 
-Uses LiteLLM. Primary: Mistral (reliable, no encoding issues).
-Groq and OpenRouter free tier as fallback.
+Uses LiteLLM. Primary: DeepSeek V3 (deepseek-chat).
+Gemini/Groq/OpenRouter as fallback tiers.
 """
 
 from __future__ import annotations
@@ -19,6 +19,17 @@ import litellm
 
 from nexus.core import database as nexus_db
 from nexus.core.text_utils import clean_text
+
+# GuardianVault import is deferred to avoid a circular import at module level.
+# Type annotations use a string literal; isinstance checks use the lazy import.
+_GuardianVault: type | None = None
+
+def _get_guardian_vault_class() -> type:
+    global _GuardianVault
+    if _GuardianVault is None:
+        from nexus.core.guardian import GuardianVault  # noqa: PLC0415
+        _GuardianVault = GuardianVault
+    return _GuardianVault
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -50,9 +61,25 @@ if _groq_key:
 else:
     logger.warning("GROQ_API_KEY not set — Groq models may not be usable.")
 
+# DeepSeek API key — primary LLM provider.
+_deepseek_key = os.getenv("DEEPSEEK_API_KEY")
+if _deepseek_key:
+    os.environ["DEEPSEEK_API_KEY"] = _deepseek_key
+    logger.info("DeepSeek key loaded: %s...", _deepseek_key[:8])
+else:
+    logger.info(
+        "DEEPSEEK_API_KEY not in environment — "
+        "will use vault if configured, else DeepSeek models skipped."
+    )
+
 # ------------------------------------------------------------------
 # Model tiers — cost-aware routing
 # ------------------------------------------------------------------
+
+# Tier Primary — DeepSeek V3 direct (used first when key is available).
+TIER_PRIMARY_DEEPSEEK: list[str] = [
+    "deepseek/deepseek-chat",  # DeepSeek V3
+]
 
 # Tier 0 — direct Gemini free-tier models (used first when available).
 TIER_0_GEMINI_FREE: list[str] = [
@@ -99,6 +126,7 @@ _MIN_RESPONSE_CHARS: int = 10
 
 # Rough per-call costs used for budgeting and "cheapest available" selection.
 MODEL_COSTS: dict[str, float] = {
+    "deepseek/deepseek-chat": 0.001,  # ~$0.27/M input, $1.10/M output
     "gemini/gemini-2.0-flash": 0.0,
     "gemini/gemini-1.5-flash": 0.0,
     "gemini/gemini-2.5-pro": 0.0,  # treat as free for now (RPM-limited)
@@ -133,6 +161,7 @@ class ModelRouter:
     call_log: list[tuple[str, str, float, bool]] = field(default_factory=list)
     _failure_counts: dict[str, int] = field(default_factory=dict, repr=False)
     _blacklist: set[str] = field(default_factory=set, repr=False)
+    vault: Any = field(default=None, repr=False)  # GuardianVault | None
 
     def complete(
         self,
@@ -172,9 +201,9 @@ class ModelRouter:
         over_budget = total_cost >= MAX_DAILY_COST
 
         # Build tiered list per house, respecting budget and bounty.
-        # Tier 0 (Gemini direct) is always attempted first when available
-        # and within per-minute rate limits.
-        base_models: list[str] = list(TIER_0_GEMINI_FREE)
+        # DeepSeek is always first when the key is available; remaining
+        # tiers are Gemini/Groq/OpenRouter as fallback.
+        base_models: list[str] = list(TIER_PRIMARY_DEEPSEEK) + list(TIER_0_GEMINI_FREE)
 
         if over_budget:
             base_models += list(TIER_1_FREE)
@@ -202,6 +231,8 @@ class ModelRouter:
             if m and m not in seen and not seen.add(m)
             and m not in self._blacklist
         ]
+        if not self._get_deepseek_key():
+            models_to_try = [m for m in models_to_try if not m.startswith("deepseek/")]
         if not _openrouter_key:
             models_to_try = [
                 m for m in models_to_try if not m.startswith("openrouter/")
@@ -269,6 +300,12 @@ class ModelRouter:
             f"{label}: all models failed or returned empty"
         )
 
+    def _get_deepseek_key(self) -> str | None:
+        """Return the DeepSeek API key from vault (preferred) or env fallback."""
+        if self.vault is not None and self.vault.has("DEEPSEEK_API_KEY"):
+            return self.vault.get("DEEPSEEK_API_KEY")
+        return os.getenv("DEEPSEEK_API_KEY")
+
     def _try_model(
         self,
         model: str,
@@ -279,6 +316,7 @@ class ModelRouter:
     ) -> str | None:
         """Attempt a single model call. Returns None on failure or empty."""
         start = time.perf_counter()
+        is_deepseek = model.startswith("deepseek/")
         is_openrouter = model.startswith("openrouter/")
         kw: dict[str, Any] = dict(
             model=model,
@@ -286,7 +324,14 @@ class ModelRouter:
             max_tokens=max_tokens,
             temperature=0.7,
         )
-        if is_openrouter:
+        if is_deepseek:
+            ds_key = self._get_deepseek_key()
+            if not ds_key:
+                logger.info("ROUTER skip DeepSeek call — no API key")
+                return None
+            kw["api_base"] = "https://api.deepseek.com"
+            kw["api_key"] = ds_key
+        elif is_openrouter:
             or_key = os.getenv("OPENROUTER_API_KEY")
             if not or_key:
                 logger.info("ROUTER skip OpenRouter call — no API key")

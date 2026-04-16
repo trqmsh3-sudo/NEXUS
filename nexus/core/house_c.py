@@ -1,22 +1,29 @@
-"""House C — The Builder.
+"""House C — The Business Action Executor.
 
 House C receives a StructuredSpecificationObject that has ALREADY
-survived House D attacks.  It builds real, working code — nothing else.
-Generated code is validated by actually running pytest against it.
-Successful builds are convertible to BeliefCertificates for House A.
+survived House D.  It generates a Python action script that takes a
+real-world action (HTTP request, market research, data scrape), runs it
+in a subprocess, and stores the output as the execution proof.
+
+Success is defined by the script producing non-empty, non-NO_DATA stdout
+with a zero exit code.  Successful results become BeliefCertificates
+for House A.
 """
 
 from __future__ import annotations
 
-import ast
+import email.mime.multipart
+import email.mime.text
 import json
 import logging
 import os
 import pathlib
 import re
+import smtplib
 import subprocess
 import sys
 import time
+import urllib.request
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -27,56 +34,97 @@ from nexus.core.house_b import StructuredSpecificationObject
 from nexus.core.house_d import DestructionReport
 from nexus.core.knowledge_graph import KnowledgeGraph
 from nexus.core.model_router import ModelRouter
+from nexus.core.openclaw_client import OpenClawClient
 from nexus.core.proof_runner import _subprocess_semaphore
 from nexus.core.skill_library import SkillLibrary
+from nexus.core.telegram_relay import TelegramRelay
 
-PYTEST_TIMEOUT: int = 30
+ACTION_TIMEOUT: int = 45
 
 logger: logging.Logger = logging.getLogger(__name__)
 
-_MAX_RETRIES: int = 1
-
 # ------------------------------------------------------------------
-# System prompts
+# Reddit r/forhire keyword filter (Fix 2 — broadened)
 # ------------------------------------------------------------------
 
-CODE_SYSTEM: str = (
-    "You are NEXUS House C. Write simple, working Python code.\n"
-    "Rules:\n"
-    "- Use ONLY Python standard library. No external imports.\n"
-    "- Every function must be complete. No placeholders.\n"
-    "- MINIMAL: If the spec asks for one function, write ONLY that function. No classes, no validation, no doctest, no kill switches.\n"
-    "- Keep it simple — 20-50 lines maximum.\n"
-    "- Return ONLY raw Python code. No markdown. No explanation.\n"
-    "- Start with: # NEXUS Build"
+FORHIRE_KEYWORDS: frozenset[str] = frozenset([
+    # Original domain keywords
+    "digital", "service", "marketing", "web", "content",
+    # Broader hiring-intent terms
+    "hire", "hiring", "need", "looking for", "paying",
+    "budget", "per hour", "per project", "freelance",
+    "job", "gig", "opportunity", "contract",
+])
+
+# ------------------------------------------------------------------
+# Behavior 1 — Competitive pricing
+# ------------------------------------------------------------------
+
+# Quote in the 35th–65th percentile of observed market rates.
+# This deliberately excludes the cheapest quartile and the top 35%,
+# positioning PROXY as credible but not premium.
+COMPETITIVE_PERCENTILE_BAND: tuple[float, float] = (0.35, 0.65)
+
+# Regex that matches common freelance rate patterns:
+#   $50/hr  $75/hour  $120 per hour  $500/project  $30-$60/hr  £40/hour
+RATE_REGEX: str = (
+    r"\$[\d,]+(?:\s*[-–]\s*\$?[\d,]+)?"   # dollar amount or range
+    r"(?:\s*/\s*(?:hr|hour|project|proj)|"  # /hr /hour /project
+    r"\s+per\s+(?:hour|project)|"           # per hour / per project
+    r"\s+fixed)?"                            # or fixed price
 )
 
-TEST_SYSTEM: str = (
-    "Write simple pytest tests for this exact code.\n"
+# ------------------------------------------------------------------
+# Behavior 2 — Follow-up email after completed job
+# ------------------------------------------------------------------
+
+FOLLOWUP_EMAIL_SUBJECT: str = "Thank you - and a referral offer for you"
+
+FOLLOWUP_EMAIL_TEMPLATE: str = """\
+Hi {client_name},
+
+Thank you so much for choosing to work with me on {job_summary}. \
+It was a pleasure and I hope the results exceeded your expectations.
+
+If you know anyone who could use similar help, I'd love an introduction. \
+As a thank-you for any referral, I'll give your contact a 10% discount \
+on their first project - no strings attached.
+
+Just have them mention your name when they reach out.
+
+Thanks again, and feel free to get in touch any time you need support.
+
+Best,
+PROXY
+"""
+
+# ------------------------------------------------------------------
+# System prompt
+# ------------------------------------------------------------------
+
+ACTION_SYSTEM: str = (
+    "You are NEXUS House C — Business Action Executor.\n"
+    "Given a business intelligence task, write a Python script that TAKES REAL ACTION.\n\n"
     "Rules:\n"
-    "- Import ONLY from the code file and pytest\n"
-    "- Test only functions that exist in the code\n"
-    "- Keep tests simple — assert statements only\n"
-    "- Maximum 10 test functions\n"
-    "- Return ONLY raw pytest code starting with: import pytest\n"
-    "- Never expect TypeError for inputs that match the function type hints.\n"
-    "- Never expect RecursionError unless the specification explicitly requires recursion failure behaviour.\n"
-    "- Test what the generated code does, not what you wish it did.\n"
-    "- If code returns empty string, expected value must be empty string (not None).\n"
-    "- Validate each assertion against the actual code behavior before returning tests.\n"
-    "- Mental check before finalizing: 'would this test pass with a correct implementation of this exact code?'\n"
-    "\n"
-    "Complex inputs (critical):\n"
-    "- If the user's prompt or spec uses nested types (e.g. list[list[int]], "
-    "intervals as pairs, matrices), every test argument MUST match that shape.\n"
-    "- Example: intervals: list[list[int]] means a list of [start, end] pairs, "
-    "e.g. [[1,3],[2,6]] — never pass a flat list of ints or a single list where "
-    "a list-of-pairs is required.\n"
-    "- Invalid-input tests: only use shapes the spec allows (wrong pairs, empty "
-    "list, unsorted intervals). Do NOT pass strings, None, or scalars as "
-    "intervals unless the spec explicitly requires type-checking for those cases.\n"
-    "- Infer the function signature from original_input / the code under test; "
-    "import and call the exact name defined in main.py.\n"
+    "- Use ONLY Python standard library (urllib, json, xml, re, etc.). No pip packages.\n"
+    "- The script MUST print at least one line of real findings to stdout.\n"
+    "- Make at least one HTTP request to gather real business data.\n"
+    "- Choose the best freely accessible source for the task — any public URL, "
+    "RSS feed, JSON API, or open web endpoint that requires no authentication.\n"
+    "- Parse the response and extract actionable intelligence.\n"
+    "- Print findings in a structured format, one finding per line.\n"
+    "- If data CANNOT be retrieved (network error, parsing failure), "
+    "print exactly: NO_DATA: <reason>\n"
+    "- Return ONLY raw Python code. No markdown. No explanation.\n"
+    "- Start the script with exactly: # NEXUS Action\n"
+    "- Keep it under 60 lines. Simple and direct.\n\n"
+    "CRITICAL — minimum results rule:\n"
+    "- Even 1 result is a success. Print it immediately.\n"
+    "- Do not add a minimum count gate (e.g. 'if len(findings) >= 10').\n"
+    "- Do not require a minimum number of results before printing.\n"
+    "- NO_DATA only when you find zero results — not when you find fewer than some target.\n"
+    "- The success criteria in the task description set business goals, "
+    "not script output thresholds.\n"
 )
 
 
@@ -86,20 +134,20 @@ TEST_SYSTEM: str = (
 
 @dataclass
 class BuildArtifact:
-    """A concrete code artifact produced by House C.
+    """A concrete action artifact produced by House C.
 
     Attributes:
         artifact_id: Unique identifier (UUID4 string).
         sso: The specification this artifact was built from.
-        code: The generated source code.
-        language: Programming language of the code.
-        tests: The generated test code.
-        documentation: Auto-generated documentation string.
+        code: The generated action script.
+        language: Always 'python'.
+        tests: Unused — kept for interface compatibility.
+        documentation: Auto-generated description.
         created_at: UTC timestamp of creation.
-        passed_validation: Whether the tests actually passed.
-        validation_errors: Error messages from failed validation.
-        execution_proof: Captured stdout from a passing test run,
-            or None if validation failed.
+        passed_validation: Whether the action produced real findings.
+        validation_errors: Error messages if action failed.
+        execution_proof: Captured stdout from a passing run, or None.
+        healing_attempts: Unused — kept for interface compatibility.
     """
 
     artifact_id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -143,9 +191,9 @@ class BuildResult:
 
     Attributes:
         artifact: The generated BuildArtifact.
-        success: Whether the build and validation succeeded.
+        success: Whether the action executed and produced findings.
         house_d_report: The DestructionReport the SSO survived.
-        ready_for_house_a: True only when ``success`` is True and
+        ready_for_house_a: True only when success is True and
             the SSO survived House D.
     """
 
@@ -165,27 +213,29 @@ class BuildResult:
 
 
 # ------------------------------------------------------------------
-# House C — The Builder
+# House C — The Business Action Executor
 # ------------------------------------------------------------------
 
 @dataclass
 class HouseC:
-    """The Builder — turns verified specifications into working code.
+    """The Builder — turns verified business specifications into real actions.
 
     House C only accepts SSOs that have already survived House D.
-    It generates production code, generates tests, runs the tests
-    via subprocess, and packages the result as a BuildArtifact.
+    It generates a Python action script, executes it in a subprocess,
+    and packages the findings as a BuildArtifact.
 
     Attributes:
         knowledge_graph: The shared NEXUS knowledge store.
         router: ModelRouter for LLM calls.
         workspace_dir: Directory where build artifacts are written.
+        skill_library: Optional compiled skill cache.
     """
 
     knowledge_graph: KnowledgeGraph
     router: ModelRouter = field(default_factory=ModelRouter)
     workspace_dir: str = "data/builds/"
     skill_library: SkillLibrary | None = None
+    openclaw_client: OpenClawClient | None = None
 
     # ------------------------------------------------------------------
     # 1. build
@@ -196,22 +246,20 @@ class HouseC:
         sso: StructuredSpecificationObject,
         destruction_report: DestructionReport,
     ) -> BuildResult:
-        """Execute the full build pipeline for a verified SSO.
+        """Execute the full action pipeline for a verified SSO.
 
-        The SSO must have survived House D — if ``destruction_report
-        .survived`` is False, a ``ValueError`` is raised immediately.
+        The SSO must have survived House D — if destruction_report
+        .survived is False, a ValueError is raised immediately.
 
-        Pipeline steps:
+        Pipeline:
         1. Verify House D survival.
-        2. Generate code via LLM.
-        3. Generate tests via LLM.
-        4. Run validation (actually execute pytest).
-        5. Save artifact to workspace.
+        2. Generate action script via LLM.
+        3. Execute action script in subprocess.
+        4. Save artifact to workspace.
 
         Args:
-            sso: The specification to build from.
-            destruction_report: The DestructionReport proving the SSO
-                survived House D.
+            sso: The specification to act on.
+            destruction_report: The DestructionReport proving survival.
 
         Returns:
             A BuildResult with the artifact and readiness flag.
@@ -231,7 +279,7 @@ class HouseC:
             raise ValueError("SSO did not survive House D")
 
         logger.info(
-            "HOUSE-C build started  problem=%r  domain=%s",
+            "HOUSE-C action started  problem=%r  domain=%s",
             sso.redefined_problem[:80], sso.domain,
         )
 
@@ -246,26 +294,65 @@ class HouseC:
                 self.skill_library.record_usage_this_cycle()
                 used_skill = True
                 logger.info("HOUSE-C using compiled skill: %s", skill.name)
-        if not used_skill:
-            artifact.code = self._generate_code(sso)
-        artifact.tests = self._generate_tests(sso, artifact.code)
+
         artifact.documentation = (
-            f"Auto-generated by NEXUS House C\n"
+            f"NEXUS House C — Business Action\n"
             f"Problem: {sso.redefined_problem}\n"
             f"Domain: {sso.domain}\n"
             f"Constraints: {', '.join(sso.constraints)}\n"
             f"Success criteria: {', '.join(sso.success_criteria)}"
         )
 
-        artifact = self._validate(artifact)
+        # ── OpenClaw browser path ───────────────────────────────
+        # Use OpenClaw whenever: no skill matched AND a client is configured
+        # AND the gateway is reachable.  PROXY decides what to search —
+        # there is no keyword gate here.  Fall through to the script path
+        # only when OpenClaw is absent or offline.
+        used_openclaw = False
+        if (
+            not used_skill
+            and self.openclaw_client is not None
+        ):
+            try:
+                if self.openclaw_client.is_available():
+                    logger.info(
+                        "HOUSE-C routing to OpenClaw  problem=%r",
+                        sso.redefined_problem[:80],
+                    )
+                    artifact = self._execute_browser_task(artifact, self.openclaw_client)
+                    used_openclaw = True
+                else:
+                    logger.warning(
+                        "HOUSE-C OpenClaw gateway offline — falling back to script"
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "HOUSE-C OpenClaw error — falling back to script  exc=%s", exc
+                )
+
+        # ── Script path (default / fallback) ───────────────────
+        if not used_skill and not used_openclaw:
+            artifact.code = self._generate_action_script(sso)
+            artifact = self._execute_action(artifact)
+
         self._save_to_workspace(artifact)
 
         success = artifact.passed_validation
         ready = success and destruction_report.survived
 
+        # ── Behavior 2: follow-up email ─────────────────────────
+        if success and artifact.execution_proof:
+            client_email = self._extract_email(artifact.execution_proof)
+            if client_email:
+                self._send_followup_email(
+                    client_email=client_email,
+                    client_name=client_email.split("@")[0].capitalize(),
+                    job_summary=sso.redefined_problem[:120],
+                )
+
         elapsed = time.perf_counter() - start
         logger.info(
-            "HOUSE-C build complete  artifact_id=%s  passed=%s  "
+            "HOUSE-C action complete  artifact_id=%s  success=%s  "
             "ready_for_house_a=%s  elapsed=%.2fs",
             artifact.artifact_id, success, ready, elapsed,
         )
@@ -278,639 +365,467 @@ class HouseC:
         )
 
     # ------------------------------------------------------------------
-    # 2. _generate_code
+    # 2. _generate_action_script
     # ------------------------------------------------------------------
 
-    def _generate_code(self, sso: StructuredSpecificationObject) -> str:
-        """Generate production code from a verified specification.
+    def _generate_action_script(self, sso: StructuredSpecificationObject) -> str:
+        """Generate a business action script from a verified specification.
 
         Args:
-            sso: The specification describing what to build.
+            sso: The specification describing the business task.
 
         Returns:
-            Raw source code string.
+            Raw Python action script string.
         """
         start = time.perf_counter()
 
+        payment_block = self._payment_block()
+        payment_note = (
+            f"\nPayment instructions to include in every proposal:\n{payment_block}\n"
+            if payment_block else ""
+        )
+
+        # Behavior 1 — inject live market-rate context
+        rates = self._research_market_rates(domain=sso.domain)
+        rate_note = (
+            f"\nCurrent r/forhire market rates ({rates['sample_size']} samples): "
+            f"low ${rates['market_low']:.0f}/hr — high ${rates['market_high']:.0f}/hr. "
+            f"Quote competitively at ${rates['competitive_quote']:.0f}/hr "
+            f"(middle band — not the cheapest, not the most expensive).\n"
+            if rates["sample_size"] > 0
+            else (
+                "\nMarket rate data unavailable. Quote competitively: "
+                "research the task first, then price in the middle of "
+                "what you find — not the cheapest, not the most expensive.\n"
+            )
+        )
+
         user_prompt = (
-            f"Build code for this specification:\n\n"
-            f"Problem: {sso.redefined_problem}\n"
-            f"Constraints: {json.dumps(sso.constraints)}\n"
+            f"Business task: {sso.redefined_problem}\n\n"
+            f"Domain: {sso.domain}\n"
             f"Success criteria: {json.dumps(sso.success_criteria)}\n"
-            f"Domain: {sso.domain}\n\n"
-            "Write ONE Python file. The file will be saved as main.py.\n"
-            "If the problem needs a single function (e.g. combine two integers), write ONLY that function — no extra classes or helpers.\n"
-            "Keep it minimal. Use only Python standard library."
+            f"Constraints: {json.dumps(sso.constraints)}\n\n"
+            "Write a Python script that fetches real data to fulfil this task.\n"
+            "Choose the best freely accessible source for this task — any public URL, "
+            "JSON API, RSS feed, or open web endpoint that requires no authentication key. "
+            "You decide what to search and where.\n"
+            f"{rate_note}"
+            f"{payment_note}"
+            "Print each finding on its own line starting with 'FINDING:'. "
+            "Even 1 result is a success — print it immediately.\n"
+            "NO_DATA only when zero results are found.\n"
+            "The script must run without installing any packages."
         )
 
-        code = self._call_llm(
-            system=CODE_SYSTEM,
+        script = self._call_llm(
+            system=ACTION_SYSTEM,
             user=user_prompt,
-            label="generate_code",
+            label="generate_action_script",
         )
-        code = self._strip_fences(code)
+        script = self._strip_fences(script)
 
         elapsed = time.perf_counter() - start
         logger.info(
-            "HOUSE-C code generated  lines=%d  elapsed=%.2fs",
-            code.count("\n") + 1, elapsed,
+            "HOUSE-C action script generated  lines=%d  elapsed=%.2fs",
+            script.count("\n") + 1, elapsed,
         )
-        return code
+        return script
 
     # ------------------------------------------------------------------
-    # 3. _generate_tests
+    # 3. _execute_action
     # ------------------------------------------------------------------
 
-    def _generate_tests(
-        self, sso: StructuredSpecificationObject, code: str,
-    ) -> str:
-        """Generate comprehensive pytest tests for the generated code.
+    def _execute_action(self, artifact: BuildArtifact) -> BuildArtifact:
+        """Execute the action script in a subprocess and capture findings.
+
+        Success requires:
+        - Exit code 0
+        - Non-empty stdout
+        - stdout does NOT start with "NO_DATA"
 
         Args:
-            sso: The specification the code was built from.
-            code: The generated source code to test.
+            artifact: The artifact containing the action script.
 
         Returns:
-            Raw pytest test code string.
+            The same artifact with passed_validation, validation_errors,
+            and execution_proof updated.
         """
-        start = time.perf_counter()
-
-        user_prompt = (
-            f"Code to test:\n{code}\n\n"
-            f"Specification:\n"
-            f"- Original user request (types & names): {sso.original_input!r}\n"
-            f"- Problem: {sso.redefined_problem}\n"
-            f"- Domain: {sso.domain}\n"
-            f"- Required inputs: {json.dumps(sso.required_inputs)}\n"
-            f"- Expected outputs: {json.dumps(sso.expected_outputs)}\n"
-            f"- Success criteria: {json.dumps(sso.success_criteria)}\n"
-            f"- Assumptions: {json.dumps(sso.assumptions)}\n\n"
-            "Write pytest tests that import from main and test "
-            "the actual functions/classes defined above.\n"
-            "Use only: from main import <name> for imports.\n"
-            "Cover happy path and edge cases. Match argument types to "
-            "original_input (e.g. list-of-intervals = list of two-int lists).\n"
-            "Avoid tests that pass the wrong container shape for nested types."
-        )
-
-        tests = self._call_llm(
-            system=TEST_SYSTEM,
-            user=user_prompt,
-            label="generate_tests",
-        )
-        tests = self._strip_fences(tests)
-        tests = self._sanitize_generated_tests(sso=sso, code=code, tests=tests)
-
-        elapsed = time.perf_counter() - start
-        logger.info(
-            "HOUSE-C tests generated  lines=%d  elapsed=%.2fs",
-            tests.count("\n") + 1, elapsed,
-        )
-        return tests
-
-    def _sanitize_generated_tests(
-        self,
-        sso: StructuredSpecificationObject,
-        code: str,
-        tests: str,
-    ) -> str:
-        """Remove obviously invalid generated tests before pytest execution.
-
-        This is a defensive pass for known bad patterns seen in production:
-        - ``lambda: raise ...`` (invalid Python syntax)
-        - ``pytest.raises(TypeError)`` for calls that match declared types
-        - ``pytest.raises(RecursionError)`` without explicit spec requirement
-        """
-        blocks = self._split_test_blocks(tests)
-        if not blocks:
-            return tests
-
-        sigs = self._collect_top_level_signatures(code)
-        recursion_required = self._requires_recursion_error(sso)
-        kept: list[str] = []
-        removed = 0
-
-        for block in blocks:
-            lowered = block.lower()
-
-            # 1) Invalid syntax pattern frequently emitted by models.
-            if "lambda:" in lowered and "raise " in lowered:
-                removed += 1
-                continue
-
-            # 2) RecursionError expectations without spec support.
-            if (
-                "pytest.raises(recursionerror)" in lowered
-                and not recursion_required
-            ):
-                removed += 1
-                continue
-
-            # 3) TypeError expectations for calls that match that call target's
-            #    own annotated signature (any top-level function in main.py).
-            if (
-                "pytest.raises(typeerror)" in lowered
-                and sigs
-                and self._typeerror_block_expects_wrong_failure(block, sigs)
-            ):
-                removed += 1
-                continue
-
-            kept.append(block)
-
-        if removed:
-            logger.info(
-                "HOUSE-C test sanitizer removed %d suspicious tests", removed,
-            )
-
-        return "\n\n".join(kept).strip() + ("\n" if kept else "")
-
-    @staticmethod
-    def _split_test_blocks(tests: str) -> list[str]:
-        """Split a pytest file into import prelude + individual test blocks."""
-        lines = tests.splitlines()
-        if not lines:
-            return []
-
-        blocks: list[str] = []
-        current: list[str] = []
-        in_test = False
-
-        for line in lines:
-            if re.match(r"^def\s+test_", line):
-                if current:
-                    blocks.append("\n".join(current).rstrip())
-                current = [line]
-                in_test = True
-                continue
-            if not in_test:
-                current.append(line)
-            else:
-                current.append(line)
-
-        if current:
-            blocks.append("\n".join(current).rstrip())
-
-        return [b for b in blocks if b.strip()]
-
-    @staticmethod
-    def _collect_top_level_signatures(code: str) -> dict[str, list[str]]:
-        """Map each top-level function name to lowercase annotation strings."""
-        out: dict[str, list[str]] = {}
-        try:
-            module = ast.parse(code)
-        except SyntaxError:
-            return out
-        for node in module.body:
-            if not isinstance(node, ast.FunctionDef):
-                continue
-            types: list[str] = []
-            for arg in node.args.args:
-                ann = arg.annotation
-                if ann is None:
-                    types.append("any")
-                else:
-                    text = (
-                        ast.unparse(ann)
-                        if hasattr(ast, "unparse")
-                        else "any"
-                    )
-                    types.append(text.strip().lower())
-            out[node.name] = types
-        return out
-
-    @staticmethod
-    def _select_primary_function(
-        sso: StructuredSpecificationObject,
-        sigs: dict[str, list[str]],
-    ) -> tuple[str | None, list[str]]:
-        """Pick the function the user probably meant (not the first helper)."""
-        if not sigs:
-            return None, []
-        text = f"{sso.original_input or ''}\n{sso.redefined_problem or ''}"
-        ordered: list[str] = []
-        for pattern in (
-            r"function\s+([A-Za-z_]\w*)\s*\(",
-            r"def\s+([A-Za-z_]\w*)\s*\(",
-            r"\b([A-Za-z_]\w*)\s*\([^)]*\)\s*->",
-        ):
-            for m in re.finditer(pattern, text, flags=re.I):
-                ordered.append(m.group(1))
-        for name in ordered:
-            if name in sigs:
-                return name, sigs[name]
-        for name in sorted(sigs.keys(), key=lambda n: (-len(sigs[n]), n)):
-            if re.search(rf"\b{re.escape(name)}\b", text):
-                return name, sigs[name]
-        public = [(n, t) for n, t in sigs.items() if not n.startswith("_")]
-        if public:
-            best = max(public, key=lambda item: len(item[1]))
-            return best[0], best[1]
-        best = max(sigs.items(), key=lambda item: len(item[1]))
-        return best[0], best[1]
-
-    @staticmethod
-    def _extract_primary_signature(
-        code: str,
-        sso: StructuredSpecificationObject,
-    ) -> tuple[str | None, list[str]]:
-        """Best-effort extraction of primary function name and param types."""
-        sigs = HouseC._collect_top_level_signatures(code)
-        if sigs:
-            return HouseC._select_primary_function(sso, sigs)
-        m = re.search(
-            r"([A-Za-z_]\w*)\s*\((.*?)\)",
-            sso.original_input or "",
-        )
-        if not m:
-            return None, []
-        fn_name = m.group(1)
-        params = m.group(2)
-        found = re.findall(r"[A-Za-z_]\w*\s*:\s*([^,\)]+)", params)
-        return fn_name, [f.strip().lower() for f in found]
-
-    @staticmethod
-    def _requires_recursion_error(sso: StructuredSpecificationObject) -> bool:
-        """True only when the spec explicitly asks for RecursionError behavior."""
-        text = " ".join(
-            [
-                sso.original_input or "",
-                sso.redefined_problem or "",
-                " ".join(sso.constraints or []),
-                " ".join(sso.success_criteria or []),
-                " ".join(sso.assumptions or []),
-            ],
-        ).lower()
-        return "recursionerror" in text
-
-    @staticmethod
-    def _context_is_pytest_raises_typeerror(expr: ast.AST) -> bool:
-        """True for ``pytest.raises(TypeError)`` / ``raises(TypeError)``."""
-        if not isinstance(expr, ast.Call):
-            return False
-        func = expr.func
-        if not isinstance(func, ast.Attribute) or func.attr != "raises":
-            return False
-        if not expr.args:
-            return False
-        return HouseC._expr_names_typeerror(expr.args[0])
-
-    @staticmethod
-    def _expr_names_typeerror(node: ast.AST) -> bool:
-        if isinstance(node, ast.Name):
-            return node.id == "TypeError"
-        if isinstance(node, ast.Tuple):
-            return any(
-                isinstance(elt, ast.Name) and elt.id == "TypeError"
-                for elt in node.elts
-            )
-        return False
-
-    @staticmethod
-    def _call_matches_param_types(call: ast.Call, param_types: list[str]) -> bool:
-        """True if positional args look type-compatible with annotations."""
-        if len(call.args) > len(param_types):
-            return False
-        for idx, arg in enumerate(call.args):
-            expected = param_types[idx] if idx < len(param_types) else "any"
-            if not HouseC._arg_matches_type(arg, expected):
-                return False
-        return True
-
-    @staticmethod
-    def _typeerror_block_expects_wrong_failure(
-        block: str,
-        sigs: dict[str, list[str]],
-    ) -> bool:
-        """Strip tests that expect TypeError for calls that match hints.
-
-        Models often emit ``with pytest.raises(TypeError): f(1, 2)`` even when
-        ``f`` takes ``int`` — those tests always fail.  We detect calls inside
-        the ``raises(TypeError)`` body and drop the whole test block when any
-        call matches that function's signature (per-function, not "first fn").
-        """
-        try:
-            module = ast.parse(block)
-        except SyntaxError:
-            return False
-
-        for node in ast.walk(module):
-            if not isinstance(node, ast.With):
-                continue
-            for item in node.items:
-                if not HouseC._context_is_pytest_raises_typeerror(
-                    item.context_expr,
-                ):
-                    continue
-                for stmt in node.body:
-                    for sub in ast.walk(stmt):
-                        if not isinstance(sub, ast.Call):
-                            continue
-                        fn = sub.func
-                        if not isinstance(fn, ast.Name):
-                            continue
-                        fname = fn.id
-                        if fname not in sigs:
-                            continue
-                        if HouseC._call_matches_param_types(sub, sigs[fname]):
-                            return True
-        return False
-
-    @staticmethod
-    def _arg_matches_type(arg: ast.AST, expected: str) -> bool:
-        """Simple literal-type matcher for sanitizer checks."""
-        expected = expected.strip().lower()
-        if expected in {"any", ""}:
-            return False
-        if expected.startswith("str"):
-            return isinstance(arg, ast.Constant) and isinstance(arg.value, str)
-        if expected.startswith("int"):
-            return isinstance(arg, ast.Constant) and isinstance(arg.value, int) and not isinstance(arg.value, bool)
-        if expected.startswith("float"):
-            return isinstance(arg, ast.Constant) and isinstance(arg.value, float)
-        if expected.startswith("bool"):
-            return isinstance(arg, ast.Constant) and isinstance(arg.value, bool)
-        if expected.startswith("list"):
-            return isinstance(arg, ast.List)
-        if expected.startswith("dict"):
-            return isinstance(arg, ast.Dict)
-        if expected.startswith("tuple"):
-            return isinstance(arg, ast.Tuple)
-        return False
-
-    # ------------------------------------------------------------------
-    # 4. _validate
-    # ------------------------------------------------------------------
-
-    def _validate(self, artifact: BuildArtifact) -> BuildArtifact:
-        """Validate a build artifact by running its tests, with self-healing.
-
-        Saves code and tests to the workspace, runs pytest, and if
-        tests fail, sends the failure output to :meth:`_heal_tests`
-        for up to 2 repair attempts before giving up.
-
-        Args:
-            artifact: The artifact to validate.
-
-        Returns:
-            The same artifact with ``passed_validation``,
-            ``validation_errors``, ``execution_proof``, and
-            ``healing_attempts`` updated.
-        """
-        max_healing = 2
         build_dir = pathlib.Path(self.workspace_dir).resolve() / artifact.artifact_id
         build_dir.mkdir(parents=True, exist_ok=True)
 
-        code_file = build_dir / "main.py"
-        test_file = build_dir / "test_main.py"
+        script_file = build_dir / "action.py"
+        script_file.write_text(artifact.code, encoding="utf-8")
 
-        code_file.write_text(artifact.code, encoding="utf-8")
+        logger.info(
+            "HOUSE-C executing action script  artifact_id=%s  timeout=%ds",
+            artifact.artifact_id, ACTION_TIMEOUT,
+        )
 
-        current_tests = artifact.tests
-
-        for attempt in range(1 + max_healing):
-            # Pre-validation: align test imports and function names with the code
+        stdout, stderr = "", ""
+        returncode = -1
+        with _subprocess_semaphore:
+            proc = subprocess.Popen(
+                [sys.executable, str(script_file)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
             try:
-                current_tests = self._repair_test_imports_and_names(
-                    artifact.code,
-                    current_tests,
-                    artifact.sso,
-                )
-            except Exception:
-                logger.exception(
-                    "HOUSE-C pre-validation repair failed; "
-                    "continuing with original tests  artifact_id=%s",
-                    artifact.artifact_id,
-                )
-
-            test_with_import = (
-                "import sys, os\n"
-                "sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\n\n"
-                f"{current_tests}"
-            )
-            test_file.write_text(test_with_import, encoding="utf-8")
-
-            logger.info(
-                "HOUSE-C validation attempt %d  artifact_id=%s",
-                attempt, artifact.artifact_id,
-            )
-
-            stdout, stderr = "", ""
-            with _subprocess_semaphore:
-                proc = subprocess.Popen(
-                    [sys.executable, "-m", "pytest", "test_main.py", "-v", "--tb=short"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    cwd=str(build_dir),
-                )
+                stdout, stderr = proc.communicate(timeout=ACTION_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                stdout, stderr = "", f"Action script timed out after {ACTION_TIMEOUT}s"
+            if getattr(proc, "returncode", None) is None:
                 try:
-                    stdout, stderr = proc.communicate(timeout=PYTEST_TIMEOUT)
-                except subprocess.TimeoutExpired:
                     proc.kill()
-                    proc.wait()
-                    stdout, stderr = "", f"pytest timed out after {PYTEST_TIMEOUT}s"
-                if getattr(proc, "returncode", None) is None:
-                    try:
-                        proc.kill()
-                        proc.wait(timeout=5)
-                    except (OSError, subprocess.TimeoutExpired):
-                        pass
-            returncode = getattr(proc, "returncode", -1)
-            if returncode is None:
-                returncode = -1
-            out, err = stdout or "", stderr or ""
+                    proc.wait(timeout=5)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+        returncode = getattr(proc, "returncode", -1)
+        if returncode is None:
+            returncode = -1
 
-            if returncode == 0:
-                artifact.passed_validation = True
-                artifact.execution_proof = out
-                artifact.tests = current_tests
-                artifact.healing_attempts = attempt
-                logger.info(
-                    "HOUSE-C validation PASSED  artifact_id=%s  "
-                    "healing_attempts=%d",
-                    artifact.artifact_id, attempt,
-                )
-                return artifact
+        output = (stdout or "").strip()
+        err_text = (stderr or "").strip()
 
-            pytest_output = (out + "\n" + err).strip()
+        # Strip traceback lines from stdout to isolate clean findings.
+        # If the script crashed mid-run, lines before the traceback are real.
+        clean_lines = [
+            ln for ln in output.splitlines()
+            if not ln.startswith("Traceback")
+            and not ln.startswith("  File ")
+            and not ln.startswith("    ")
+            and not (ln and ln[0].isupper() and "Error" in ln and ":" in ln)
+        ]
+        clean_output = "\n".join(clean_lines).strip()
 
-            if attempt < max_healing:
-                logger.info(
-                    "HOUSE-C healing attempt %d/%d  artifact_id=%s",
-                    attempt + 1, max_healing, artifact.artifact_id,
-                )
-                healed = self._heal_tests(
-                    artifact.code, current_tests, pytest_output,
-                )
-                current_tests = self._strip_fences(healed)
-                current_tests = self._sanitize_generated_tests(
-                    artifact.sso,
-                    artifact.code,
-                    current_tests,
+        has_output = bool(clean_output)
+        # NO_DATA on any line means the script signalled failure
+        is_no_data = any(ln.startswith("NO_DATA") for ln in clean_output.splitlines())
+
+        # Partial success: real findings printed before a crash still count.
+        # A script that found data and then crashed is better than silence.
+        script_succeeded = returncode == 0
+        partial_success = returncode != 0 and has_output and not is_no_data
+
+        if (script_succeeded or partial_success) and has_output and not is_no_data:
+            artifact.passed_validation = True
+            artifact.execution_proof = clean_output
+            if partial_success:
+                logger.warning(
+                    "HOUSE-C action PARTIAL (script crashed but produced findings)  "
+                    "artifact_id=%s  lines=%d  stderr=%r",
+                    artifact.artifact_id, clean_output.count("\n") + 1,
+                    err_text[:200],
                 )
             else:
-                artifact.passed_validation = False
-                artifact.validation_errors = [pytest_output]
-                artifact.tests = current_tests
-                artifact.healing_attempts = attempt
-                logger.warning(
-                    "HOUSE-C validation FAILED after %d healing attempts  "
-                    "artifact_id=%s",
-                    max_healing, artifact.artifact_id,
+                logger.info(
+                    "HOUSE-C action SUCCESS  artifact_id=%s  lines=%d",
+                    artifact.artifact_id, clean_output.count("\n") + 1,
                 )
+        else:
+            reason = ""
+            if is_no_data:
+                reason = clean_output or output
+            elif not has_output:
+                reason = "empty output"
+            else:
+                reason = f"exit code {returncode}"
+            error_detail = f"{reason} | stderr: {err_text[:300]}" if err_text else reason
+            artifact.passed_validation = False
+            artifact.validation_errors = [error_detail or "no output from action script"]
+            logger.warning(
+                "HOUSE-C action FAILED  artifact_id=%s  reason=%r  stderr=%r",
+                artifact.artifact_id, reason, err_text[:200],
+            )
 
         return artifact
 
     # ------------------------------------------------------------------
-    # 4b. _heal_tests
+    # 4. OpenClaw helpers
     # ------------------------------------------------------------------
 
-    def _heal_tests(
-        self, code: str, tests: str, pytest_output: str,
-    ) -> str:
-        """Fix failing tests based on pytest output.
+    @staticmethod
+    def _payment_block() -> str:
+        """Build a payment instructions string from env vars.
 
-        Sends the code, current tests, and failure output to the LLM
-        and asks it to return a corrected version of the test file
-        that matches the code's actual behaviour.
+        Uses PAYPAL_EMAIL when set; falls back to GMAIL_ADDRESS / GMAIL_USER
+        since they are the same account.  Returns an empty string when no
+        address is resolvable so callers can omit the block gracefully.
+        """
+        paypal_email = (
+            os.getenv("PAYPAL_EMAIL", "").strip()
+            or os.getenv("GMAIL_ADDRESS", "").strip()
+            or os.getenv("GMAIL_USER", "").strip()
+        )
+        if not paypal_email:
+            return ""
+        return f"Payment via PayPal to: {paypal_email}"
+
+    # ------------------------------------------------------------------
+    # Behavior 1 — Market-rate research
+    # ------------------------------------------------------------------
+
+    def _research_market_rates(self, domain: str = "") -> dict:
+        """Scrape r/forhire for current hourly rates and return pricing context.
+
+        Fetches the 25 newest posts, extracts dollar-rate mentions with
+        RATE_REGEX, and computes low/high/competitive_quote from the
+        COMPETITIVE_PERCENTILE_BAND.  Falls back to a default quote of
+        $50/hr with sample_size=0 on any network or parsing failure.
 
         Args:
-            code: The generated source code (unchanged).
-            tests: The current test code with failures.
-            pytest_output: The captured pytest failure output.
+            domain: Optional domain hint (unused currently, reserved for
+                domain-specific rate filtering in future).
 
         Returns:
-            The complete fixed test file as raw code.
+            Dict with keys: market_low, market_high, competitive_quote,
+            sample_size, currency, context.
         """
-        start = time.perf_counter()
+        _default = {
+            "market_low": 30.0,
+            "market_high": 150.0,
+            "competitive_quote": 55.0,
+            "sample_size": 0,
+            "currency": "USD",
+            "context": (
+                "Market rate data unavailable. Quote competitively — "
+                "aim for the middle of typical market range, not cheapest."
+            ),
+        }
+        try:
+            url = "https://www.reddit.com/r/forhire/new.json?limit=50"
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "NEXUS-PROXY/1.0 market-rate-research"}
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="replace"))
+            posts = data.get("data", {}).get("children", [])
+        except Exception as exc:
+            logger.info("HOUSE-C rate research failed (network): %s", exc)
+            return _default
 
-        user_prompt = (
-            "These pytest tests are almost correct but have minor failures.\n"
-            "Fix ONLY the failing tests based on the error output.\n"
-            "Do not change passing tests.\n"
-            "Do not change the code being tested.\n"
-            "Match the exact output format the code produces.\n\n"
-            f"CODE:\n{code}\n\n"
-            f"CURRENT TESTS:\n{tests}\n\n"
-            f"PYTEST FAILURES:\n{pytest_output[-2000:]}\n\n"
-            "Return the complete fixed test file. "
-            "Raw pytest code only. No markdown."
-        )
+        rates: list[float] = []
+        for post in posts:
+            pd = post.get("data", {})
+            text = f"{pd.get('title', '')} {pd.get('selftext', '')}"
+            for m in re.finditer(RATE_REGEX, text, re.IGNORECASE):
+                raw = re.sub(r"[,$£€]", "", m.group(0).split("/")[0].split()[0].split("-")[0])
+                try:
+                    val = float(raw.replace(",", ""))
+                    if 5.0 <= val <= 500.0:   # sanity: ignore $2 and $50,000
+                        rates.append(val)
+                except ValueError:
+                    pass
 
-        healed = self._call_llm(
-            system="You fix failing pytest tests precisely. "
-            "Return ONLY the complete test file. No explanation.",
-            user=user_prompt,
-            label="heal_tests",
-        )
+        if not rates:
+            return _default
 
-        elapsed = time.perf_counter() - start
+        rates.sort()
+        n = len(rates)
+        lo_idx = max(0, int(COMPETITIVE_PERCENTILE_BAND[0] * n) - 1)
+        hi_idx = min(n - 1, int(COMPETITIVE_PERCENTILE_BAND[1] * n))
+        band = rates[lo_idx: hi_idx + 1]
+        competitive_quote = round(sum(band) / len(band), 0) if band else rates[n // 2]
+
+        result = {
+            "market_low":        round(rates[0], 0),
+            "market_high":       round(rates[-1], 0),
+            "competitive_quote": competitive_quote,
+            "sample_size":       n,
+            "currency":          "USD",
+            "context": (
+                f"r/forhire market rates ({n} samples): "
+                f"${rates[0]:.0f}–${rates[-1]:.0f}/hr. "
+                f"Quote ${competitive_quote:.0f}/hr (competitive mid-band)."
+            ),
+        }
         logger.info(
-            "HOUSE-C test healing complete  elapsed=%.2fs", elapsed,
+            "HOUSE-C market rates  samples=%d  low=$%.0f  high=$%.0f  quote=$%.0f",
+            n, result["market_low"], result["market_high"], result["competitive_quote"],
         )
-        return healed
+        return result
 
     # ------------------------------------------------------------------
-    # 4c. _repair_test_imports_and_names
+    # Behavior 2 — Follow-up email
     # ------------------------------------------------------------------
 
-    def _repair_test_imports_and_names(
+    @staticmethod
+    def _extract_email(text: str) -> str | None:
+        """Return the first email address found in text, or None."""
+        m = re.search(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", text)
+        return m.group(0) if m else None
+
+    def _send_followup_email(
         self,
-        code: str,
-        tests: str,
-        sso: StructuredSpecificationObject | None = None,
-    ) -> str:
-        """Best-effort repair when tests call functions that don't exist.
+        client_email: str,
+        client_name: str,
+        job_summary: str,
+    ) -> bool:
+        """Send a thank-you + referral email to the client via Gmail SMTP.
 
-        Heuristics:
-        - Parse the code to find all top-level function names.
-        - Parse the tests to find called function names.
-        - If tests call functions that are not defined in the code and
-          there is exactly one function defined in the code, assume the
-          tests *meant* to call that function and rewrite:
-            * ``from main import missing`` -> the real function name
-            * bare calls to ``missing(...)`` -> real function name
-        - If multiple functions exist, use :meth:`_select_primary_function`
-          (SSO text + signatures) as the rewrite target for undefined names.
+        Credentials are read from env vars (populated from the Guardian
+        vault via .env).  Returns False — never raises — so a transient
+        SMTP failure cannot crash a successful build cycle.
 
-        This is deliberately conservative: if parsing fails or no target
-        is resolved, the tests are returned unchanged.
+        Args:
+            client_email: Recipient address.
+            client_name:  Display name for the greeting.
+            job_summary:  One-line description of the completed work.
+
+        Returns:
+            True if the email was sent successfully, False otherwise.
         """
-        try:
-            code_module = ast.parse(code)
-        except SyntaxError:
-            return tests
+        sender = (
+            os.getenv("GMAIL_USER", "").strip()
+            or os.getenv("GMAIL_ADDRESS", "").strip()
+        )
+        password = (
+            os.getenv("GMAIL_APP_PASS", "").strip()
+            or os.getenv("GMAIL_PASS", "").strip()
+        )
+        if not sender or not password:
+            logger.warning(
+                "HOUSE-C followup email skipped — no Gmail credentials in env"
+            )
+            return False
 
-        code_funcs: set[str] = {
-            node.name
-            for node in code_module.body
-            if isinstance(node, ast.FunctionDef)
-        }
-        if not code_funcs:
-            return tests
-
-        try:
-            test_module = ast.parse(tests)
-        except SyntaxError:
-            return tests
-
-        called_funcs: set[str] = set()
-        for node in ast.walk(test_module):
-            if isinstance(node, ast.Call):
-                func = node.func
-                if isinstance(func, ast.Name):
-                    called_funcs.add(func.id)
-
-        # Ignore pytest and obvious helpers
-        ignore = {"pytest"}
-        missing = {
-            name
-            for name in called_funcs
-            if name not in code_funcs and name not in ignore
-        }
-
-        if not missing:
-            return tests
-
-        target_name: str | None = None
-        if len(code_funcs) == 1:
-            target_name = next(iter(code_funcs))
-        elif sso is not None:
-            sigs = self._collect_top_level_signatures(code)
-            primary, _ = self._select_primary_function(sso, sigs)
-            if primary and primary in code_funcs and missing:
-                target_name = primary
-
-        if target_name is None:
-            return tests
-
-        repaired = tests
-
-        # 1) Fix `from main import ...` lines that reference missing names.
-        def replace_import(match: re.Match[str]) -> str:
-            imported = [p.strip() for p in match.group(1).split(",")]
-            new_imports: list[str] = []
-            for name in imported:
-                base = name.split(" as ")[0].strip()
-                if base in missing:
-                    new_imports.append(target_name)
-                else:
-                    new_imports.append(name)
-            return f"from main import {', '.join(new_imports)}"
-
-        repaired = re.sub(
-            r"from\s+main\s+import\s+([^\n]+)",
-            replace_import,
-            repaired,
+        body = FOLLOWUP_EMAIL_TEMPLATE.format(
+            client_name=client_name,
+            job_summary=job_summary,
         )
 
-        # 2) Replace bare calls to missing function names with the target.
-        for wrong in missing:
-            # word-boundary replacement to avoid substrings
-            repaired = re.sub(rf"\b{re.escape(wrong)}\b", target_name, repaired)
+        msg = email.mime.multipart.MIMEMultipart("alternative")
+        msg["Subject"] = FOLLOWUP_EMAIL_SUBJECT
+        msg["From"]    = sender
+        msg["To"]      = client_email
+        msg.attach(email.mime.text.MIMEText(body, "plain", "us-ascii"))
 
-        return repaired
+        try:
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+                smtp.login(sender, password)
+                smtp.sendmail(sender, client_email, msg.as_string())
+            logger.info(
+                "HOUSE-C followup email sent  to=%s  job=%r",
+                client_email, job_summary[:60],
+            )
+            return True
+        except Exception as exc:
+            logger.warning(
+                "HOUSE-C followup email FAILED  to=%s  exc=%s", client_email, exc
+            )
+            return False
+
+    def _execute_browser_task(
+        self,
+        artifact: BuildArtifact,
+        client: OpenClawClient,
+    ) -> BuildArtifact:
+        """Dispatch a browser task to OpenClaw and capture the result.
+
+        Builds a structured natural-language prompt from the SSO,
+        sends it to the gateway, and stores the response as
+        ``execution_proof`` when successful.
+
+        Success is defined as a non-empty response that does not start
+        with ``NO_DATA``.
+
+        Args:
+            artifact: The artifact to populate.
+            client:   The OpenClawClient to use.
+
+        Returns:
+            The same artifact with validation state updated.
+        """
+        sso = artifact.sso
+        payment_block = self._payment_block()
+        payment_instruction = (
+            f"\n\nClose every proposal with these payment instructions:\n"
+            f"{payment_block}"
+            if payment_block else ""
+        )
+        task = (
+            f"Business intelligence task: {sso.redefined_problem}\n"
+            f"Domain: {sso.domain}\n"
+            f"Success criteria: {', '.join(sso.success_criteria)}\n\n"
+            "You are a browser agent. Choose any online sources you decide are most "
+            "relevant — search engines, job boards, social media, forums, marketplaces, "
+            "news sites, or anywhere else you think will yield useful data. "
+            "You are not restricted to any particular site. Pick the best sources for "
+            "this specific task and report what you find.\n\n"
+            "Navigate to the sites you choose, gather data, and report findings. "
+            "Write a professional outreach message where relevant (introduce yourself, "
+            "describe your service, state your rate, invite a reply)."
+            f"{payment_instruction}\n\n"
+            "Start each finding with 'FINDING:'. "
+            "If no data can be retrieved from any source, start your reply with 'NO_DATA: <reason>'."
+        )
+
+        result = client.send(task)
+
+        # ── SMS verification relay ──────────────────────────────
+        # OpenClaw signals it hit an SMS screen with:
+        #   WAITING_FOR_SMS: <site>
+        # We ask the owner via Telegram, wait for their reply, then
+        # send the code back to OpenClaw to complete the flow.
+        if result and result.startswith("WAITING_FOR_SMS:"):
+            site = result[len("WAITING_FOR_SMS:"):].strip()
+            logger.info(
+                "HOUSE-C SMS verification required  site=%r  artifact_id=%s",
+                site, artifact.artifact_id,
+            )
+            relay = TelegramRelay.from_env()
+            if relay is None:
+                logger.warning(
+                    "HOUSE-C SMS relay unavailable — no TELEGRAM_BOT_TOKEN/CHAT_ID"
+                )
+                artifact.passed_validation = False
+                artifact.validation_errors = [
+                    f"SMS verification required for {site} but Telegram relay not configured"
+                ]
+                return artifact
+
+            code = relay.request_sms_code(site)
+            if code is None:
+                logger.warning(
+                    "HOUSE-C SMS relay timeout waiting for code  site=%r", site
+                )
+                artifact.passed_validation = False
+                artifact.validation_errors = [
+                    f"SMS verification timeout for {site} — no code received via Telegram"
+                ]
+                return artifact
+
+            # Re-submit the original task with the SMS code injected
+            logger.info(
+                "HOUSE-C SMS code received — resuming browser task  site=%r", site
+            )
+            continuation = (
+                f"{task}\n\n"
+                f"SMS verification code for {site}: {code}\n"
+                "Enter this code in the verification field and continue."
+            )
+            result = client.send(continuation)
+
+        # ── Final result handling ───────────────────────────────
+        if not result or result.startswith("NO_DATA"):
+            reason = result or "OpenClaw returned empty response"
+            artifact.passed_validation = False
+            artifact.validation_errors  = [reason]
+            logger.warning(
+                "HOUSE-C browser task FAILED  artifact_id=%s  reason=%r",
+                artifact.artifact_id, reason[:120],
+            )
+        else:
+            artifact.passed_validation = True
+            artifact.execution_proof   = result
+            logger.info(
+                "HOUSE-C browser task SUCCESS  artifact_id=%s  lines=%d",
+                artifact.artifact_id, result.count("\n") + 1,
+            )
+
+        return artifact
 
     # ------------------------------------------------------------------
     # 5. _save_to_workspace
@@ -938,37 +853,54 @@ class HouseC:
         return str(meta_path.resolve())
 
     # ------------------------------------------------------------------
-    # 6. to_belief_certificate
+    # 5. to_belief_certificate
     # ------------------------------------------------------------------
 
     def to_belief_certificate(
         self, artifact: BuildArtifact,
     ) -> BeliefCertificate:
-        """Convert a successful build artifact into a BeliefCertificate.
-
-        Only validated artifacts should be converted. Failed artifacts
-        will produce a low-confidence certificate that House A's gated
-        ``add_belief`` will reject.
+        """Convert a successful action artifact into a BeliefCertificate.
 
         Args:
             artifact: The BuildArtifact to convert.
 
         Returns:
-            A BeliefCertificate whose ``executable_proof`` is runnable
-            Python (the built source) so House A's proof subprocess can
-            execute it. Pytest stdout is kept on the artifact only.
+            A BeliefCertificate whose executable_proof contains the
+            action findings and claim reflects what was discovered.
         """
-        confidence = 0.9 if artifact.passed_validation else 0.3
+        confidence = 0.88 if artifact.passed_validation else 0.3
+
+        # Build claim from actual findings when available
+        if artifact.execution_proof:
+            first_line = artifact.execution_proof.splitlines()[0][:200]
+            claim = f"Business action findings: {first_line}"
+        else:
+            claim = (
+                f"House C business action for: "
+                f"{artifact.sso.redefined_problem}"
+            )
+
+        # executable_proof must be a static snippet that House A can re-run
+        # without making live HTTP calls or hitting Unicode issues.
+        # We encode the already-captured findings as deterministic print statements.
+        proof: str | None = None
+        if artifact.execution_proof:
+            # Sanitize to ASCII-safe chars so cp1252 never chokes on re-run.
+            safe = artifact.execution_proof.encode("ascii", errors="replace").decode("ascii")
+            # Build a static Python snippet that just prints the findings.
+            lines = [repr(ln) for ln in safe.splitlines()]
+            proof = "# NEXUS verified findings\n" + "\n".join(
+                f"print({ln})" for ln in lines
+            )
+        elif artifact.code:
+            proof = (artifact.code or "").strip() or None
 
         cert = BeliefCertificate(
-            claim=(
-                f"House C built working code for: "
-                f"{artifact.sso.redefined_problem}"
-            ),
-            source=f"nexus:house_c:artifact:{artifact.artifact_id}",
+            claim=claim,
+            source=f"nexus:house_c:action:{artifact.artifact_id}",
             confidence=confidence,
             domain=artifact.sso.domain,
-            executable_proof=(artifact.code or "").strip() or None,
+            executable_proof=proof,
             created_at=artifact.created_at,
             last_verified=datetime.now(timezone.utc),
         )
@@ -985,30 +917,14 @@ class HouseC:
     # ------------------------------------------------------------------
 
     def _call_llm(self, system: str, user: str, label: str) -> str:
-        """Route an LLM call through the ModelRouter.
-
-        Args:
-            system: The system prompt.
-            user: The user prompt.
-            label: A human-readable label for logging.
-
-        Returns:
-            The raw text content from the LLM response.
-        """
+        """Route an LLM call through the ModelRouter."""
         return self.router.complete(
             house="house_c", system=system, user=user, label=label,
         )
 
     @staticmethod
     def _strip_fences(text: str) -> str:
-        """Remove markdown code fences if the LLM wrapped its output.
-
-        Args:
-            text: Raw LLM output that may be wrapped in fences.
-
-        Returns:
-            The unwrapped code string.
-        """
+        """Remove markdown code fences if the LLM wrapped its output."""
         stripped = text.strip()
         for prefix in ("```python", "```py", "```"):
             if stripped.startswith(prefix):

@@ -13,20 +13,19 @@ from dotenv import load_dotenv
 # Load .env from project root (one directory above this file)
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-# Ensure UTF-8 output on Windows
-if hasattr(sys.stdout, "buffer"):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
-if hasattr(sys.stderr, "buffer"):
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
-
-from nexus.core.belief_certificate import BeliefCertificate  # noqa: E402
 from nexus.core.text_utils import clean_text
+from nexus.core.guardian import Guardian, GuardianReport, migrate_key_to_vault
 from nexus.core.house_b import HouseB
 from nexus.core.house_c import HouseC
 from nexus.core.house_d import HouseD
 from nexus.core.house_omega import CycleResult, HouseOmega, SystemHealth
 from nexus.core.knowledge_graph import KnowledgeGraph
 from nexus.core.model_router import ModelRouter
+from nexus.core.proxy_mission import PROXY_MISSION_BELIEFS
+from nexus.core.architecture_beliefs import ARCHITECTURE_BELIEFS
+from nexus.core.identity_manager import IdentityManager
+from nexus.core.proposal_sender import ProposalSender
+from nexus.core.telegram_relay import TelegramRelay
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -52,26 +51,113 @@ BANNER: str = r"""
 
 
 # ------------------------------------------------------------------
+# fail_fast_on_critical_findings
+# ------------------------------------------------------------------
+
+def fail_fast_on_critical_findings(report: GuardianReport) -> None:
+    """Abort startup if the Guardian audit found any CRITICAL secrets.
+
+    Args:
+        report: The GuardianReport produced by Guardian.audit().
+
+    Raises:
+        SystemExit: If the report contains one or more CRITICAL secret findings.
+    """
+    critical = [f for f in report.secret_findings if f.severity == "CRITICAL"]
+    if critical:
+        logging.critical(
+            "GUARDIAN: %d CRITICAL secret(s) exposed — aborting NEXUS startup. "
+            "Remove plaintext credentials before restarting.",
+            len(critical),
+        )
+        raise SystemExit(
+            f"GUARDIAN audit failed: {len(critical)} CRITICAL secret(s) found. "
+            "Migrate credentials to the vault and remove them from source files."
+        )
+
+
+# ------------------------------------------------------------------
 # build_nexus
 # ------------------------------------------------------------------
 
-def build_nexus() -> HouseOmega:
+def build_nexus(
+    *,
+    guardian_vault_path: str | None = None,
+    guardian_master_key: str | None = None,
+    guardian_scan_paths: list[str] | None = None,
+) -> HouseOmega:
     """Initialise the complete NEXUS system.
 
     Creates the shared KnowledgeGraph, boots every House, wires
-    them into House Omega, and injects three foundational beliefs
-    as the initial external signal.
+    them into House Omega, and injects the nine PROXY mission axioms
+    as the foundational belief set.
+
+    Guardian runs a security audit before any LLM components are created.
+    If CRITICAL secrets are found in the scan paths, startup is aborted.
+
+    Args:
+        guardian_vault_path: Path to the encrypted vault file.
+            Defaults to the ``NEXUS_VAULT_PATH`` env var, then
+            ``"data/guardian_vault.enc"``.
+        guardian_master_key: Master key for the vault.
+            Defaults to the ``NEXUS_VAULT_KEY`` env var.
+        guardian_scan_paths: Directories to scan for exposed secrets.
+            Defaults to ``["nexus/", "scripts/"]``.
 
     Returns:
         A fully initialised HouseOmega ready to accept cycles.
+
+    Raises:
+        SystemExit: If Guardian finds CRITICAL exposed secrets.
+        ValueError: If no master key is available for the vault.
     """
+    # ── 1. Guardian security check ────────────────────────────
+    vault_path = (
+        guardian_vault_path
+        or os.getenv("NEXUS_VAULT_PATH")
+        or "data/guardian_vault.enc"
+    )
+    master_key = guardian_master_key or os.getenv("NEXUS_VAULT_KEY")
+    scan_paths = guardian_scan_paths  # None → Guardian uses its own defaults
+
+    guardian = Guardian(
+        vault_path=vault_path,
+        master_key=master_key,
+        scan_paths=scan_paths,
+    )
+
+    # Migrate DEEPSEEK_API_KEY from .env into vault on first run.
+    _env_path = Path(__file__).resolve().parent.parent / ".env"
+    if _env_path.exists():
+        try:
+            migrate_key_to_vault(_env_path, guardian.vault, "DEEPSEEK_API_KEY")
+        except KeyError:
+            pass  # Key absent or already migrated — nothing to do.
+
+    report = guardian.audit()
+    fail_fast_on_critical_findings(report)
+
+    # ── 2. NEXUS components ────────────────────────────────────
     graph = KnowledgeGraph()
     loaded = graph.persistence.last_load_count
     print(f"  Beliefs loaded from disk: {loaded}")
 
-    router = ModelRouter()
+    router = ModelRouter(vault=guardian.vault)
+
+    identity_manager = IdentityManager(data_dir="data", vault=guardian.vault)
+    telegram_relay = TelegramRelay.from_env()
+    proposal_sender = ProposalSender(
+        router=router,
+        identity_manager=identity_manager,
+        telegram=telegram_relay,
+    )
+
     house_b = HouseB(knowledge_graph=graph, router=router)
-    house_c = HouseC(knowledge_graph=graph, router=router)
+    house_c = HouseC(
+        knowledge_graph=graph,
+        router=router,
+        proposal_sender=proposal_sender,
+    )
     house_d = HouseD(knowledge_graph=graph, router=router, min_cycles=1)
 
     omega = HouseOmega(
@@ -82,39 +168,13 @@ def build_nexus() -> HouseOmega:
         sleep_cycle_interval=50,
     )
 
-    starter_beliefs = [
-        BeliefCertificate(
-            claim="Clean code is better than clever code",
-            source="NEXUS founding axiom",
-            confidence=0.9,
-            domain="Software Engineering",
-            executable_proof="print('clean')",
-            decay_rate=0.05,
-            is_axiom=True,
-        ),
-        BeliefCertificate(
-            claim="Tests must run before code is trusted",
-            source="NEXUS founding axiom",
-            confidence=0.95,
-            domain="Software Engineering",
-            executable_proof="assert True",
-            decay_rate=0.05,
-            is_axiom=True,
-        ),
-        BeliefCertificate(
-            claim="Every system needs a kill switch",
-            source="NEXUS founding axiom",
-            confidence=0.99,
-            domain="System Architecture",
-            executable_proof="assert True",
-            decay_rate=0.05,
-            is_axiom=True,
-        ),
-    ]
-
-    print("  Injecting starter beliefs...")
-    result = graph.inject_external_signal(starter_beliefs)
+    print("  Injecting PROXY mission axioms...")
+    result = graph.inject_external_signal(PROXY_MISSION_BELIEFS)
     print(f"  New beliefs added: {result['added']}  Rejected: {result['rejected']}")
+
+    print("  Injecting architecture beliefs...")
+    arch_result = graph.inject_external_signal(ARCHITECTURE_BELIEFS)
+    print(f"  Architecture beliefs added: {arch_result['added']}  Rejected: {arch_result['rejected']}")
     print()
 
     print("  Knowledge Graph seeded:")
@@ -263,6 +323,12 @@ def main() -> int:
     Returns:
         Exit code (0 for success).
     """
+    # Ensure UTF-8 output on Windows (safe here — not at import time)
+    if hasattr(sys.stdout, "buffer"):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+    if hasattr(sys.stderr, "buffer"):
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
+
     print(BANNER)
 
     print("  Booting NEXUS...")

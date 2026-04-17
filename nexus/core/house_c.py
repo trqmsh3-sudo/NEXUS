@@ -36,6 +36,7 @@ from nexus.core.knowledge_graph import KnowledgeGraph
 from nexus.core.model_router import ModelRouter
 from nexus.core.openclaw_client import OpenClawClient
 from nexus.core.proof_runner import _subprocess_semaphore
+from nexus.core.proposal_sender import ProposalSender
 from nexus.core.skill_library import SkillLibrary
 from nexus.core.telegram_relay import TelegramRelay
 
@@ -272,6 +273,7 @@ class HouseC:
     workspace_dir: str = "data/builds/"
     skill_library: SkillLibrary | None = None
     openclaw_client: OpenClawClient | None = None
+    proposal_sender: ProposalSender | None = None
 
     # ------------------------------------------------------------------
     # 1. build
@@ -385,6 +387,22 @@ class HouseC:
                     client_name=client_email.split("@")[0].capitalize(),
                     job_summary=sso.redefined_problem[:120],
                 )
+
+        # ── Behavior 3: send proposals for every found opportunity ──
+        if success and artifact.execution_proof and self.proposal_sender is not None:
+            identity = self.proposal_sender._identity_manager.get_active_identity()
+            if identity is not None:
+                results = self.proposal_sender.process_findings(
+                    artifact.execution_proof, identity
+                )
+                sent_count = sum(1 for r in results if r.sent)
+                notified_count = sum(1 for r in results if r.notified)
+                logger.info(
+                    "HOUSE-C proposals  total=%d  emailed=%d  telegram=%d",
+                    len(results), sent_count, notified_count,
+                )
+            else:
+                logger.warning("HOUSE-C proposal_sender: no active identity — skipping proposals")
 
         elapsed = time.perf_counter() - start
         logger.info(

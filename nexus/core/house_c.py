@@ -46,6 +46,42 @@ logger: logging.Logger = logging.getLogger(__name__)
 # ------------------------------------------------------------------
 # Reddit r/forhire keyword filter (Fix 2 — broadened)
 # ------------------------------------------------------------------
+# Browser-status phrases that indicate OpenClaw returned a state message
+# instead of actual search results. Results containing ONLY these phrases
+# are rejected by _is_browser_status_only().
+_BROWSER_STATUS_PHRASES: frozenset[str] = frozenset([
+    "browser operational",
+    "browser loaded",
+    "browser started",
+    "page loaded",
+    "page operational",
+    "navigation complete",
+    "navigation successful",
+    "loaded: google",
+    "loaded: bing",
+    "loaded: duckduckgo",
+    "loaded google",
+    "loaded bing",
+])
+
+
+def _is_browser_status_only(result: str) -> bool:
+    """Return True if *result* is a browser-state message with no real data.
+
+    A result is considered status-only when:
+    - It contains no URL (http:// or https://)
+    - AND it contains no price/rate signal ($, /hr, /hour, budget)
+    - AND its lower-cased text matches one of the known status phrases
+    """
+    lower = result.lower()
+    has_url = "http://" in lower or "https://" in lower
+    has_price = any(s in lower for s in ["$", "/hr", "/hour", "budget", "rate:", "salary"])
+    if has_url or has_price:
+        return False
+    return any(phrase in lower for phrase in _BROWSER_STATUS_PHRASES)
+
+
+# ------------------------------------------------------------------
 
 FORHIRE_KEYWORDS: frozenset[str] = frozenset([
     # Original domain keywords
@@ -746,23 +782,27 @@ class HouseC:
             if payment_block else ""
         )
         task = (
-            f"Business intelligence task: {sso.redefined_problem}\n"
-            f"Domain: {sso.domain}\n"
-            f"Success criteria: {', '.join(sso.success_criteria)}\n\n"
-            "You are a browser agent. Choose any online sources you decide are most "
-            "relevant — search engines, job boards, social media, forums, marketplaces, "
-            "news sites, or anywhere else you think will yield useful data. "
-            "You are not restricted to any particular site. Pick the best sources for "
-            "this specific task and report what you find.\n\n"
-            "Navigate to the sites you choose, gather data, and report findings. "
-            "Write a professional outreach message where relevant (introduce yourself, "
-            "describe your service, state your rate, invite a reply)."
-            f"{payment_instruction}\n\n"
-            "Start each finding with 'FINDING:'. "
-            "If no data can be retrieved from any source, start your reply with 'NO_DATA: <reason>'."
+            f"You are a browser automation agent. Complete this task step by step:\n\n"
+            f"TASK: {sso.redefined_problem}\n\n"
+            "STEPS:\n"
+            "1. Navigate to a search engine (Google, Bing, or DuckDuckGo)\n"
+            f"2. Search for: {sso.redefined_problem}\n"
+            "3. Wait for the search results page to fully load\n"
+            "4. Visit the 2-3 most relevant result pages\n"
+            "5. Extract from each result: title, URL, rate or price or budget if stated, "
+            "posting date if available, and any contact or apply link\n"
+            "6. Return each result on its own line starting with 'FINDING:'\n"
+            "   Format: FINDING: [Title] | [URL] | [Rate/Price/Budget] | [Key details]\n\n"
+            "RULES:\n"
+            "- Do not return status messages about browser state (e.g. 'browser loaded', "
+            "'page operational', 'navigation complete'). Only return actual data found.\n"
+            "- Only actual data found counts as a finding — titles, links, prices, deadlines\n"
+            f"- Success criteria: {', '.join(sso.success_criteria)}\n"
+            f"{payment_instruction}\n"
+            "- If you cannot retrieve any data after trying, respond with: NO_DATA: <reason>"
         )
 
-        result = client.send(task)
+        result = client.send(task, timeout=120)
 
         # ── SMS verification relay ──────────────────────────────
         # OpenClaw signals it hit an SMS screen with:
@@ -816,6 +856,15 @@ class HouseC:
             logger.warning(
                 "HOUSE-C browser task FAILED  artifact_id=%s  reason=%r",
                 artifact.artifact_id, reason[:120],
+            )
+        elif _is_browser_status_only(result):
+            artifact.passed_validation = False
+            artifact.validation_errors  = [
+                f"OpenClaw returned a browser-state message, not real data: {result[:120]}"
+            ]
+            logger.warning(
+                "HOUSE-C browser task FAILED [status-only]  artifact_id=%s  result=%r",
+                artifact.artifact_id, result[:120],
             )
         else:
             artifact.passed_validation = True

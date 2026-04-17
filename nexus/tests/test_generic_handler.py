@@ -57,6 +57,7 @@ from openclaw_generic_handler import (  # noqa: E402
     _load_session_cookies,
     _is_nav_link,
     _extract_listings,
+    _extract_target_url,
 )
 
 # Chrome epoch offset (microseconds since 1601-01-01)
@@ -116,6 +117,30 @@ class _MockPage:
 
     async def query_selector_all(self, _selector: str):
         return self._anchors
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# _extract_target_url — subdomain handling
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestExtractTargetUrl:
+
+    def test_subdomain_preserved(self):
+        url = _extract_target_url("Open gemini.google.com and ask something")
+        assert url == "https://gemini.google.com", f"got {url!r}"
+
+    def test_bare_domain_gets_www(self):
+        url = _extract_target_url("Search freelancer.com/projects for Python gigs")
+        assert url == "https://www.freelancer.com/projects", f"got {url!r}"
+
+    def test_explicit_https_url_returned_as_is(self):
+        url = _extract_target_url("Go to https://remote.co/remote-jobs/developer")
+        assert url == "https://remote.co/remote-jobs/developer"
+
+    def test_subdomain_not_prefixed_with_www(self):
+        url = _extract_target_url("Visit app.upwork.com/jobs")
+        assert url is not None
+        assert "www." not in url, f"www. incorrectly added: {url!r}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -89,7 +89,7 @@ _PRICE_RE = re.compile(
 _URL_RE = re.compile(r"https?://[^\s)\"'<>\]]+")
 
 _DOMAIN_PATH_RE = re.compile(
-    r"(?i)\b([a-z0-9][a-z0-9-]*\.(?:com|org|net|io|co|dev|app|gov|edu)"
+    r"(?i)\b((?:[a-z0-9][a-z0-9-]*\.)+(?:com|org|net|io|co|dev|app|gov|edu)"
     r"(?:/[^\s)\"'<>\]]*)?)"
 )
 
@@ -169,7 +169,13 @@ def _extract_target_url(task: str) -> str | None:
         host = d.split("/")[0]
         if host in ("example.com", "localhost", "openclaw.com"):
             continue
-        prefix = "https://www." if not host.startswith("www.") else "https://"
+        # Only prepend www. for bare second-level domains (e.g. google.com).
+        # Subdomains (gemini.google.com, remote.co) must not get www. added.
+        host_parts = host.split(".")
+        if len(host_parts) == 2 and not host.startswith("www."):
+            prefix = "https://www."
+        else:
+            prefix = "https://"
         return prefix + d
     return None
 

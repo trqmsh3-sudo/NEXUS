@@ -214,7 +214,7 @@ async def background_training() -> None:
         await asyncio.sleep(_BACKGROUND_INTERVAL_SECONDS)  # 10 minutes
         try:
             try:
-                await asyncio.wait_for(_training_semaphore.acquire(), timeout=0.0)
+                await asyncio.wait_for(_training_semaphore.acquire(), timeout=1.0)
             except asyncio.TimeoutError:
                 continue
             try:

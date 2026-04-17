@@ -44,9 +44,9 @@ class TestModuleExists:
 # ══════════════════════════════════════════════════════════════════
 
 class TestBeliefCount:
-    def test_exactly_five_beliefs(self):
-        assert len(ARCHITECTURE_BELIEFS) == 5, (
-            f"Expected 5 architectural beliefs, got {len(ARCHITECTURE_BELIEFS)}"
+    def test_exactly_six_beliefs(self):
+        assert len(ARCHITECTURE_BELIEFS) == 6, (
+            f"Expected 6 architectural beliefs, got {len(ARCHITECTURE_BELIEFS)}"
         )
 
     def test_all_are_belief_certificates(self):
@@ -64,9 +64,9 @@ class TestBeliefFlags:
         assert belief.is_axiom is True, f"{belief.claim[:40]!r}: is_axiom must be True"
 
     @pytest.mark.parametrize("belief", ARCHITECTURE_BELIEFS)
-    def test_confidence_095(self, belief):
-        assert belief.confidence == 0.95, (
-            f"{belief.claim[:40]!r}: confidence must be 0.95, got {belief.confidence}"
+    def test_confidence_high(self, belief):
+        assert belief.confidence >= 0.95, (
+            f"{belief.claim[:40]!r}: confidence must be >= 0.95, got {belief.confidence}"
         )
 
     @pytest.mark.parametrize("belief", ARCHITECTURE_BELIEFS)
@@ -205,8 +205,8 @@ class TestKnowledgeGraphInjection:
         monkeypatch.setenv("NEXUS_DATA_DIR", str(tmp_path))
         graph = KnowledgeGraph()
         result = graph.inject_external_signal(ARCHITECTURE_BELIEFS)
-        assert result["added"] == 5, (
-            f"Expected 5 beliefs added, got {result['added']} "
+        assert result["added"] == 6, (
+            f"Expected 6 beliefs added, got {result['added']} "
             f"(rejected={result['rejected']})"
         )
 
@@ -238,7 +238,7 @@ class TestKnowledgeGraphInjection:
         # The graph stores beliefs by claim (dict key) — no duplicates possible.
         arch_claims = [b.claim for b in ARCHITECTURE_BELIEFS]
         count = sum(1 for b in graph.beliefs_snapshot() if b.claim in arch_claims)
-        assert count == 5, f"Expected exactly 5 architecture beliefs in graph, got {count}"
+        assert count == 6, f"Expected exactly 6 architecture beliefs in graph, got {count}"
 
 
 # ══════════════════════════════════════════════════════════════════

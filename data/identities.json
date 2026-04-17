@@ -1,0 +1,17 @@
+[
+  {
+    "id": "alex",
+    "name": "Alex",
+    "business": "Alex Digital Services",
+    "niche": [
+      "Virtual Assistant",
+      "Data Entry",
+      "Content Writing",
+      "AI tasks"
+    ],
+    "email": "vault:GMAIL_ADDRESS",
+    "bio": "Experienced digital professional specializing in VA work, data entry, and AI-assisted tasks. Fast, reliable, and detail-oriented.",
+    "paypal": "vault:PAYPAL_EMAIL",
+    "active": true
+  }
+]

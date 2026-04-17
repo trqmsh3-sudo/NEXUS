@@ -176,6 +176,39 @@ _AI_TOOLS_CADENCE = BeliefCertificate(
 )
 
 # ---------------------------------------------------------------------------
+# Belief 6 — Finding without acting = failed cycle
+# ---------------------------------------------------------------------------
+_OUTREACH_IMPERATIVE = BeliefCertificate(
+    claim=(
+        "Every found opportunity must result in immediate outreach action. "
+        "Finding without acting = failed cycle. "
+        "Success = proposal sent, not opportunity found."
+    ),
+    source="PROXY architecture axiom",
+    confidence=1.0,
+    domain="Business Development",
+    decay_rate=0.0,
+    is_axiom=True,
+    executable_proof=(
+        "def cycle_succeeded(opportunity_found: bool, proposal_sent: bool) -> bool:\n"
+        "    # Finding alone is NOT success — outreach must follow\n"
+        "    return opportunity_found and proposal_sent\n"
+        "\n"
+        "# Finding without acting = failed cycle\n"
+        "assert cycle_succeeded(True,  False) is False, 'Found but no action = failure'\n"
+        "# Proposal sent = success\n"
+        "assert cycle_succeeded(True,  True)  is True,  'Found + sent = success'\n"
+        "# No opportunity found = nothing to act on\n"
+        "assert cycle_succeeded(False, False) is False, 'No opportunity = no cycle'\n"
+        "# Cannot send proposal without finding opportunity\n"
+        "assert cycle_succeeded(False, True)  is False, 'Cannot act without opportunity'\n"
+        "# Immediate action required — no delay between find and act\n"
+        "OUTREACH_DELAY_SECONDS_MAX = 0  # immediate\n"
+        "assert OUTREACH_DELAY_SECONDS_MAX == 0, 'Outreach must be immediate'"
+    ),
+)
+
+# ---------------------------------------------------------------------------
 # Public export
 # ---------------------------------------------------------------------------
 ARCHITECTURE_BELIEFS: list[BeliefCertificate] = [
@@ -184,4 +217,5 @@ ARCHITECTURE_BELIEFS: list[BeliefCertificate] = [
     _CONFIDENCE_ROUTING,
     _SKILL_LIBRARY,
     _AI_TOOLS_CADENCE,
+    _OUTREACH_IMPERATIVE,
 ]

@@ -42,6 +42,7 @@ from nexus.core.belief_quality_filter import BeliefQualityFilter
 from nexus.core.knowledge_graph import KnowledgeGraph
 from nexus.core.model_router import MAX_DAILY_COST, ModelRouter
 from nexus.core.openclaw_client import OpenClawClient
+from nexus.core.proxy_commander import ProxyCommander
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)-8s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -75,13 +76,26 @@ async def lifespan(app: FastAPI):
         supabase_beliefs,
     )
 
-    task = asyncio.create_task(background_training())
+    training_task = asyncio.create_task(background_training())
+
+    # Start Telegram polling loop if credentials are available
+    commander_task: asyncio.Task | None = None
+    if commander is not None:
+        commander_task = asyncio.create_task(commander.run_polling_loop())
+        logger.info("ProxyCommander: Telegram polling loop started")
+    else:
+        logger.info("ProxyCommander: no Telegram credentials — polling disabled")
+
     try:
         yield
     finally:
-        task.cancel()
+        training_task.cancel()
         with suppress(asyncio.CancelledError):
-            await task
+            await training_task
+        if commander_task is not None:
+            commander_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await commander_task
 
 
 app = FastAPI(title="NEXUS", version="1.0.0", lifespan=lifespan)
@@ -116,6 +130,22 @@ omega = HouseOmega(
     sleep_cycle_interval=50,
     max_refinements=3,
 )
+
+# ProxyCommander — Telegram interface for owner control and daily reports.
+# Try vault first (if GUARDIAN_MASTER_KEY is set), fall back to env vars.
+commander: ProxyCommander | None = None
+_guardian_key = os.getenv("GUARDIAN_MASTER_KEY", "").strip()
+_vault_path = "data/guardian_vault.enc"
+if _guardian_key and Path(_vault_path).exists():
+    try:
+        commander = ProxyCommander.from_vault(_vault_path, _guardian_key, omega)
+        logger.info("ProxyCommander: credentials loaded from vault")
+    except Exception as _vault_exc:
+        logger.warning("ProxyCommander: vault load failed (%s) — trying env vars", _vault_exc)
+if commander is None:
+    commander = ProxyCommander.from_env(omega)
+    if commander:
+        logger.info("ProxyCommander: credentials loaded from environment")
 
 starter_beliefs = [
     BeliefCertificate(

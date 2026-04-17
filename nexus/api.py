@@ -38,6 +38,7 @@ from nexus.core.house_b import HouseB
 from nexus.core.house_c import HouseC
 from nexus.core.house_d import HouseD
 from nexus.core.house_omega import HouseOmega
+from nexus.core.belief_quality_filter import BeliefQualityFilter
 from nexus.core.knowledge_graph import KnowledgeGraph
 from nexus.core.model_router import MAX_DAILY_COST, ModelRouter
 from nexus.core.openclaw_client import OpenClawClient
@@ -96,8 +97,9 @@ app.add_middleware(
 os.makedirs("data/knowledge_store", exist_ok=True)
 os.makedirs("data/builds", exist_ok=True)
 
-graph = KnowledgeGraph()
 router = ModelRouter()
+quality_filter = BeliefQualityFilter(router=router)
+graph = KnowledgeGraph(quality_filter=quality_filter)
 house_b = HouseB(knowledge_graph=graph, router=router)
 _openclaw_url = os.getenv("OPENCLAW_URL", "http://host.docker.internal:18789")
 _openclaw_token = os.getenv("OPENCLAW_TOKEN")

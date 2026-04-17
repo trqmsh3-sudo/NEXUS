@@ -63,6 +63,7 @@ class KnowledgeGraph:
     graph: dict[str, set[str]] = field(default_factory=dict)
     domain_index: dict[str, set[str]] = field(default_factory=dict)
     storage_path: str | None = None
+    quality_filter: Any | None = None  # BeliefQualityFilter (Any avoids circular import)
     persistence: PersistenceManager = field(init=False)
     governor_alert: Callable[[dict[str, Any]], None] | None = field(
         default=None, init=False, repr=False,
@@ -199,6 +200,15 @@ class KnowledgeGraph:
         """
         if _reject_unit_test_outside_pytest(belief):
             return False
+
+        if self.quality_filter is not None:
+            if not self.quality_filter.is_actionable(belief):
+                logger.info(
+                    "REJECTED [quality_filter] claim=%r",
+                    belief.claim[:80],
+                )
+                return False
+
         if belief.is_expired():
             logger.warning(
                 "REJECTED [expired] claim=%r  decay_rate=%s  last_verified=%s",

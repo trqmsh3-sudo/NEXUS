@@ -117,6 +117,14 @@ _BLACKLIST_TTL_SECONDS: int = int(
     os.getenv("NEXUS_MODEL_BLACKLIST_TTL_SECONDS", "3600"),
 )
 
+_GROQ_RL_FILE: pathlib.Path = pathlib.Path("data/groq_rate_limits.json")
+
+# Per-minute RPM limits for Groq free-tier models.
+_GROQ_RATE_LIMITS: dict[str, int] = {
+    "groq/llama-3.3-70b-versatile": 30,
+    "groq/llama-3.1-8b-instant": 30,
+}
+
 OPENROUTER_HEADERS: dict[str, str] = {
     "HTTP-Referer": "https://github.com/trqmsh3-sudo/NEXUS",
     "X-Title": "NEXUS",
@@ -251,9 +259,15 @@ class ModelRouter:
             if model.startswith("gemini/") and not self._can_use_gemini(model):
                 logger.info(
                     "ROUTER skip  house=%s  model=%s  label=%s  reason=gemini_rate_limit",
-                    house,
-                    model,
-                    label,
+                    house, model, label,
+                )
+                continue
+
+            # Respect Groq per-minute rate limits before calling.
+            if model.startswith("groq/") and not self._can_use_groq(model):
+                logger.info(
+                    "ROUTER skip  house=%s  model=%s  label=%s  reason=groq_rate_limit",
+                    house, model, label,
                 )
                 continue
 
@@ -306,6 +320,18 @@ class ModelRouter:
             return self.vault.get("DEEPSEEK_API_KEY")
         return os.getenv("DEEPSEEK_API_KEY")
 
+    def _get_gemini_key(self) -> str | None:
+        """Return the Gemini API key from vault (preferred) or env fallback."""
+        if self.vault is not None and self.vault.has("GEMINI_API_KEY"):
+            return self.vault.get("GEMINI_API_KEY")
+        return os.getenv("GEMINI_API_KEY") or None
+
+    def _get_groq_key(self) -> str | None:
+        """Return the Groq API key from vault (preferred) or env fallback."""
+        if self.vault is not None and self.vault.has("GROQ_API_KEY"):
+            return self.vault.get("GROQ_API_KEY")
+        return os.getenv("GROQ_API_KEY") or None
+
     def _try_model(
         self,
         model: str,
@@ -318,6 +344,8 @@ class ModelRouter:
         start = time.perf_counter()
         is_deepseek = model.startswith("deepseek/")
         is_openrouter = model.startswith("openrouter/")
+        is_gemini = model.startswith("gemini/")
+        is_groq = model.startswith("groq/")
         kw: dict[str, Any] = dict(
             model=model,
             messages=messages,
@@ -339,6 +367,18 @@ class ModelRouter:
             kw["api_base"] = "https://openrouter.ai/api/v1"
             kw["api_key"] = or_key
             kw["extra_headers"] = OPENROUTER_HEADERS
+        elif is_gemini:
+            gem_key = self._get_gemini_key()
+            if not gem_key:
+                logger.info("ROUTER skip Gemini call — no API key")
+                return None
+            kw["api_key"] = gem_key
+        elif is_groq:
+            groq_key = self._get_groq_key()
+            if not groq_key:
+                logger.info("ROUTER skip Groq call — no API key")
+                return None
+            kw["api_key"] = groq_key
         try:
             logger.info("ROUTER call  house=%s  model=%s  label=%s", house, model, label)
             response = litellm.completion(**kw)
@@ -528,6 +568,70 @@ class ModelRouter:
         # Within limit: increment and persist.
         counters[model] = used + 1
         self._save_gemini_window(window_start, counters)
+        return True
+
+    # ------------------------------------------------------------------
+    # Groq rate limiting helpers  (mirrors Gemini RL)
+    # ------------------------------------------------------------------
+
+    def _load_groq_window(self) -> tuple[datetime, dict[str, int]]:
+        """Load current Groq rate-limit window and per-model counts."""
+        now = datetime.now(timezone.utc)
+        try:
+            if _GROQ_RL_FILE.exists():
+                raw = _GROQ_RL_FILE.read_text(encoding="utf-8")
+                data = json.loads(raw or "{}")
+                window_start_raw = data.get("window_start")
+                if window_start_raw:
+                    window_start = datetime.fromisoformat(window_start_raw)
+                    if window_start.tzinfo is None:
+                        window_start = window_start.replace(tzinfo=timezone.utc)
+                else:
+                    window_start = now
+                counters = {str(k): int(v) for k, v in (data.get("counters") or {}).items()}
+                return window_start, counters
+        except Exception as exc:
+            logger.warning("ROUTER groq RL load failed: %s", exc)
+        return now, {}
+
+    def _save_groq_window(self, window_start: datetime, counters: dict[str, int]) -> None:
+        """Persist Groq rate-limit window and counters."""
+        try:
+            _GROQ_RL_FILE.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "window_start": window_start.isoformat(),
+                "counters": counters,
+            }
+            _GROQ_RL_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except Exception as exc:
+            logger.warning("ROUTER groq RL save failed: %s", exc)
+
+    def _can_use_groq(self, model: str) -> bool:
+        """Return True if model is within per-minute Groq limits and key is set."""
+        if not self._get_groq_key():
+            return False
+
+        max_rpm = _GROQ_RATE_LIMITS.get(model)
+        if max_rpm is None:
+            return True  # Unknown model: allow it
+
+        window_start, counters = self._load_groq_window()
+        now = datetime.now(timezone.utc)
+
+        if (now - window_start).total_seconds() >= 60:
+            window_start = now
+            counters = {}
+
+        used = int(counters.get(model, 0))
+        if used >= max_rpm:
+            logger.info(
+                "ROUTER groq RL hit  model=%s  used=%d  limit=%d",
+                model, used, max_rpm,
+            )
+            return False
+
+        counters[model] = used + 1
+        self._save_groq_window(window_start, counters)
         return True
 
     # ------------------------------------------------------------------

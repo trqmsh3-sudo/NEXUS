@@ -87,12 +87,13 @@ class ProposalSender:
             f"Job title: {job_title}\n\n"
             f"Job description:\n{job_description}"
         )
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ]
         try:
-            return self._router.complete(messages, label="proposal_writer")
+            return self._router.complete(
+                house="house_c",
+                system=system,
+                user=user,
+                label="proposal_writer",
+            )
         except Exception as exc:
             logger.warning("proposal_sender: LLM call failed: %s", exc)
             return (

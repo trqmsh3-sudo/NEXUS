@@ -88,8 +88,8 @@ class _FakeRouter:
         self.response = response
         self.calls: list[dict] = []
 
-    def complete(self, messages: list[dict], **kwargs) -> str:
-        self.calls.append({"messages": messages, **kwargs})
+    def complete(self, *, house: str, system: str, user: str, label: str = "", **kwargs) -> str:
+        self.calls.append({"house": house, "system": system, "user": user, "label": label, **kwargs})
         return self.response
 
 
@@ -151,7 +151,7 @@ class TestGenerateProposal:
         identity = _make_identity()
         sender.generate_proposal("Test Job", "Job description here", identity)
         assert len(router.calls) == 1
-        prompt_text = str(router.calls[0]["messages"])
+        prompt_text = router.calls[0]["system"] + router.calls[0]["user"]
         assert "Experienced digital professional" in prompt_text
 
     def test_prompt_includes_niche_keywords(self):
@@ -159,8 +159,27 @@ class TestGenerateProposal:
         sender, _, _ = _make_sender(router=router)
         identity = _make_identity()
         sender.generate_proposal("VA Task", "Virtual assistant needed", identity)
-        prompt_text = str(router.calls[0]["messages"])
+        prompt_text = router.calls[0]["system"] + router.calls[0]["user"]
         assert "Virtual Assistant" in prompt_text or "Data Entry" in prompt_text
+
+    def test_router_called_with_keyword_only_signature(self):
+        """complete() must be called with house=, system=, user= kwargs — not positional messages."""
+        router = _FakeRouter()
+        sender, _, _ = _make_sender(router=router)
+        identity = _make_identity()
+        sender.generate_proposal("Python Dev", "We need a dev", identity)
+        assert len(router.calls) == 1
+        call = router.calls[0]
+        assert "house" in call, "missing 'house' kwarg"
+        assert "system" in call, "missing 'system' kwarg"
+        assert "user" in call, "missing 'user' kwarg"
+        assert "messages" not in call, "must not pass positional 'messages' arg"
+
+    def test_router_label_is_proposal_writer(self):
+        router = _FakeRouter()
+        sender, _, _ = _make_sender(router=router)
+        sender.generate_proposal("Dev Job", "desc", _make_identity())
+        assert router.calls[0].get("label") == "proposal_writer"
 
 
 # ---------------------------------------------------------------------------
@@ -293,12 +312,14 @@ class TestProcessFindings:
         assert hasattr(pr, "sent")
         assert hasattr(pr, "notified")
 
-    def test_calls_notify_telegram_for_each_finding(self):
+    def test_calls_notify_telegram_only_when_email_sent(self):
+        """Telegram fires only when an email was actually sent, not on every finding."""
         relay = _FakeRelay()
         sender, _, _ = _make_sender(telegram=relay)
         identity = _make_identity()
+        # SAMPLE_FINDINGS has no contact email → no sends → no Telegram
         sender.process_findings(SAMPLE_FINDINGS, identity)
-        assert len(relay.sent) == 2
+        assert len(relay.sent) == 0
 
     def test_sent_false_when_no_email_in_finding(self):
         sender, _, _ = _make_sender()
@@ -323,7 +344,8 @@ class TestProcessFindings:
             )
             assert result[0].sent is True
 
-    def test_notified_true_when_relay_configured(self):
+    def test_notified_false_when_no_email_even_with_relay(self):
+        """No email found in finding → not sent → not notified, even with relay."""
         relay = _FakeRelay()
         sender, _, _ = _make_sender(telegram=relay)
         identity = _make_identity()
@@ -331,7 +353,7 @@ class TestProcessFindings:
             "FINDING: Python Dev | https://freelancer.com/1 | $40/hr | Need help\n",
             identity,
         )
-        assert result[0].notified is True
+        assert result[0].notified is False
 
     def test_notified_false_when_relay_none(self):
         sender, _, _ = _make_sender(telegram=None)
@@ -433,6 +455,9 @@ class TestHouseCIntegration:
         )
         dr = DestructionReport(survived=True, survival_score=0.9, target_description="test")
 
-        hc.build(sso, dr)
+        # Patch DirectJobFetcher to return empty so OpenClaw path runs and returns NO_DATA
+        with patch("nexus.core.house_c.DirectJobFetcher") as mock_fetcher_cls:
+            mock_fetcher_cls.return_value.fetch.return_value = ""
+            hc.build(sso, dr)
 
         mock_sender.process_findings.assert_not_called()

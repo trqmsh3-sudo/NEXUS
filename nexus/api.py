@@ -43,6 +43,7 @@ from nexus.core.knowledge_graph import KnowledgeGraph
 from nexus.core.model_router import MAX_DAILY_COST, ModelRouter
 from nexus.core.openclaw_client import OpenClawClient
 from nexus.core.proxy_commander import ProxyCommander
+from nexus.core.strategic_agent import StrategicAgent
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)-8s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -131,6 +132,8 @@ omega = HouseOmega(
     max_refinements=3,
 )
 
+strategic_agent = StrategicAgent()
+
 # ProxyCommander — Telegram interface for owner control and daily reports.
 # Try vault first (if GUARDIAN_MASTER_KEY is set), fall back to env vars.
 commander: ProxyCommander | None = None
@@ -200,8 +203,8 @@ def _load_training_tasks() -> list[str]:
         return []
 
 
-def _run_one_training_cycle(task: str) -> None:
-    """Run a single background training cycle on *task*."""
+def _run_one_training_cycle(task: str) -> bool:
+    """Run a single background training cycle on *task*. Returns True on success."""
     try:
         import psutil
         rss = psutil.Process().memory_info().rss
@@ -212,7 +215,7 @@ def _run_one_training_cycle(task: str) -> None:
                 rss / (1024 * 1024),
                 _BACKGROUND_MEMORY_LIMIT_BYTES / (1024 * 1024),
             )
-            return
+            return False
     except Exception as exc:
         logger.debug("psutil memory check failed (non-fatal): %s", exc)
 
@@ -224,7 +227,7 @@ def _run_one_training_cycle(task: str) -> None:
             health_before.daily_cost,
             MAX_DAILY_COST,
         )
-        return
+        return False
 
     logger.info("Background training cycle start  task=%r", task[:80])
     result = omega.run(task)
@@ -237,6 +240,7 @@ def _run_one_training_cycle(task: str) -> None:
         health_after.autonomy_ratio,
         health_after.total_beliefs,
     )
+    return bool(result.success)
 
 
 async def background_training() -> None:
@@ -250,13 +254,10 @@ async def background_training() -> None:
             except asyncio.TimeoutError:
                 continue
             try:
-                tasks = _load_training_tasks()
-                if not tasks:
-                    logger.info("Background training: no training tasks found.")
-                    continue
-                task = tasks[_training_index % len(tasks)]
-                _training_index += 1
-                await asyncio.to_thread(_run_one_training_cycle, task)
+                task = strategic_agent.next_task()
+                logger.info("StrategicAgent: selected task=%r", task[:80])
+                cycle_success: bool = await asyncio.to_thread(_run_one_training_cycle, task)
+                strategic_agent.record_outcome(task, success=cycle_success)
             finally:
                 _training_semaphore.release()
         except asyncio.CancelledError:

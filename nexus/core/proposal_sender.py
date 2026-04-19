@@ -223,9 +223,13 @@ class ProposalSender:
                     gmail_password=gmail_pass,
                 )
 
-            # Notify Telegram
-            target = job_url or job_title
-            notified = self.notify_telegram(target)
+            # Only notify Telegram when a proposal was actually emailed
+            notified = False
+            if sent:
+                target = job_url or job_title
+                notified = self.notify_telegram(
+                    f"Proposal emailed to {target} — awaiting response"
+                )
 
             results.append(ProposalResult(
                 job_title=job_title,
@@ -241,3 +245,17 @@ class ProposalSender:
             )
 
         return results
+
+    def notify_critical(self, message: str) -> bool:
+        """Send a critical Telegram alert requiring owner attention.
+
+        Use for: errors requiring action, unexpected state, budget exhausted.
+        Returns True if sent successfully.
+        """
+        if self._telegram is None:
+            return False
+        try:
+            return bool(self._telegram.send_message(f"CRITICAL: {message}"))
+        except Exception as exc:
+            logger.warning("proposal_sender: critical notify failed: %s", exc)
+            return False

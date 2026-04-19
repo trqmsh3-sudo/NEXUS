@@ -39,11 +39,14 @@ from nexus.core.house_c import HouseC
 from nexus.core.house_d import HouseD
 from nexus.core.house_omega import HouseOmega
 from nexus.core.belief_quality_filter import BeliefQualityFilter
+from nexus.core.identity_manager import IdentityManager
 from nexus.core.knowledge_graph import KnowledgeGraph
 from nexus.core.model_router import MAX_DAILY_COST, ModelRouter
 from nexus.core.openclaw_client import OpenClawClient
+from nexus.core.proposal_sender import ProposalSender
 from nexus.core.proxy_commander import ProxyCommander
 from nexus.core.strategic_agent import StrategicAgent
+from nexus.core.telegram_relay import TelegramRelay
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)-8s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -121,6 +124,21 @@ _openclaw_token = os.getenv("OPENCLAW_TOKEN")
 _openclaw_client = OpenClawClient(base_url=_openclaw_url, token=_openclaw_token)
 logger.info("OpenClawClient configured: url=%s available=%s", _openclaw_url, _openclaw_client.is_available())
 house_c = HouseC(knowledge_graph=graph, router=router, openclaw_client=_openclaw_client)
+
+# Wire ProposalSender so House C auto-sends proposals on successful findings
+_identity_manager = IdentityManager()
+_telegram_relay = TelegramRelay.from_env()
+house_c.proposal_sender = ProposalSender(
+    router=router,
+    identity_manager=_identity_manager,
+    telegram=_telegram_relay,
+)
+logger.info(
+    "ProposalSender: wired to HouseC  gmail=%s  telegram=%s",
+    "set" if os.getenv("GMAIL_APP_PASS") else "not set",
+    "set" if _telegram_relay else "not set",
+)
+
 house_d = HouseD(knowledge_graph=graph, router=router, min_cycles=1)
 
 omega = HouseOmega(
@@ -227,6 +245,15 @@ def _run_one_training_cycle(task: str) -> bool:
             health_before.daily_cost,
             MAX_DAILY_COST,
         )
+        if _telegram_relay:
+            try:
+                _telegram_relay.send_message(
+                    f"PROXY: daily budget exhausted "
+                    f"(${health_before.daily_cost:.3f}/${MAX_DAILY_COST:.2f}). "
+                    "All cycles paused until midnight reset."
+                )
+            except Exception:
+                pass
         return False
 
     logger.info("Background training cycle start  task=%r", task[:80])

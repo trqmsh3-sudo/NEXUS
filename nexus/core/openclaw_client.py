@@ -21,9 +21,11 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_BASE_URL = "http://127.0.0.1:18789"
-_COMPLETIONS_PATH = "/v1/chat/completions"
-_DEFAULT_MODEL    = "openclaw/default"
+_DEFAULT_BASE_URL  = "http://127.0.0.1:18789"
+_COMPLETIONS_PATH  = "/v1/chat/completions"
+_SCREENSHOT_PATH   = "/screenshot"
+_ACTION_PATH       = "/action"
+_DEFAULT_MODEL     = "openclaw/default"
 
 
 class OpenClawClient:
@@ -109,6 +111,54 @@ class OpenClawClient:
             return ""
         except Exception as exc:
             logger.warning("OpenClawClient: unexpected error — %s", exc)
+            return ""
+
+    def screenshot(self, timeout: int = 10) -> str:
+        """Request a base64-encoded PNG screenshot from the gateway.
+
+        Returns the base64 string, or an empty string on any failure.
+        """
+        headers: dict[str, str] = {}
+        token = self._get_token()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+
+        url = self.base_url + _SCREENSHOT_PATH
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                body = resp.read().decode("utf-8")
+            data = json.loads(body)
+            return data.get("image", "")
+        except Exception as exc:
+            logger.warning("OpenClawClient.screenshot: failed — %s", exc)
+            return ""
+
+    def execute_action(self, action: dict, timeout: int = 15) -> str:
+        """Send a structured action to the gateway and return any result text.
+
+        Args:
+            action:  Dict with at minimum a ``type`` key
+                     (e.g. ``{"type": "click", "x": 100, "y": 200}``).
+            timeout: HTTP request timeout in seconds.
+
+        Returns an empty string on any failure — never raises.
+        """
+        payload = json.dumps(action).encode("utf-8")
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        token = self._get_token()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+
+        url = self.base_url + _ACTION_PATH
+        req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                body = resp.read().decode("utf-8")
+            data = json.loads(body)
+            return data.get("result", "")
+        except Exception as exc:
+            logger.warning("OpenClawClient.execute_action: failed — %s", exc)
             return ""
 
     # ──────────────────────────────────────────────────────────

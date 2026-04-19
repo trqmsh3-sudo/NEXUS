@@ -34,6 +34,7 @@ from nexus.core.house_b import StructuredSpecificationObject
 from nexus.core.house_d import DestructionReport
 from nexus.core.knowledge_graph import KnowledgeGraph
 from nexus.core.model_router import ModelRouter
+from nexus.core.openclaw_ai_controller import OpenClawAIController
 from nexus.core.openclaw_client import OpenClawClient
 from nexus.core.proof_runner import _subprocess_semaphore
 from nexus.core.proposal_sender import ProposalSender
@@ -820,7 +821,23 @@ class HouseC:
             "- If you cannot retrieve any data after trying, respond with: NO_DATA: <reason>"
         )
 
-        result = client.send(task, timeout=120)
+        # ── AI controller path (DeepSeek vision) ───────────────
+        # Use screenshot→DeepSeek→action loop when a key is available.
+        # Falls back to single-shot client.send() when no key is found.
+        deepseek_key = self.router._get_deepseek_key()
+        if deepseek_key:
+            ctrl = OpenClawAIController(client, api_key=deepseek_key)
+            ai_task = (
+                f"Find: {sso.redefined_problem}. "
+                "Extract all results as FINDING: lines — include title, URL, rate/price, "
+                f"key details. Success criteria: {', '.join(sso.success_criteria)}"
+                f"{payment_instruction}"
+            )
+            result = ctrl.run(ai_task)
+            if not result:
+                result = "NO_DATA: AI controller returned no findings"
+        else:
+            result = client.send(task, timeout=120)
 
         # ── SMS verification relay ──────────────────────────────
         # OpenClaw signals it hit an SMS screen with:

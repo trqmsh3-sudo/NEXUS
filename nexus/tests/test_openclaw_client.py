@@ -293,3 +293,120 @@ class TestGuardianOpenclaw:
         )
         critical = [f for f in findings if f.pattern_name == "openclaw_token"]
         assert all(f.severity == "CRITICAL" for f in critical)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  5. screenshot()
+# ═══════════════════════════════════════════════════════════════
+
+class TestScreenshot:
+    def test_returns_base64_image_from_gateway(self):
+        client = OpenClawClient()
+        resp = _mock_response({"image": "abc123base64=="})
+        with patch("urllib.request.urlopen", return_value=resp):
+            result = client.screenshot()
+        assert result == "abc123base64=="
+
+    def test_returns_empty_string_on_network_error(self):
+        client = OpenClawClient()
+        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")):
+            result = client.screenshot()
+        assert result == ""
+
+    def test_returns_empty_string_on_bad_json(self):
+        client = OpenClawClient()
+        resp = _mock_response("not json")
+        with patch("urllib.request.urlopen", return_value=resp):
+            result = client.screenshot()
+        assert result == ""
+
+    def test_returns_empty_when_image_key_missing(self):
+        client = OpenClawClient()
+        resp = _mock_response({"status": "ok"})
+        with patch("urllib.request.urlopen", return_value=resp):
+            result = client.screenshot()
+        assert result == ""
+
+    def test_requests_correct_endpoint(self):
+        client = OpenClawClient(base_url="http://127.0.0.1:18789")
+        captured = []
+        def capture(req, timeout=None):
+            captured.append(req)
+            return _mock_response({"image": "data"})
+        with patch("urllib.request.urlopen", side_effect=capture):
+            client.screenshot()
+        assert captured[0].full_url == "http://127.0.0.1:18789/screenshot"
+
+    def test_never_raises(self):
+        client = OpenClawClient()
+        with patch("urllib.request.urlopen", side_effect=RuntimeError("boom")):
+            result = client.screenshot()
+        assert result == ""
+
+
+# ═══════════════════════════════════════════════════════════════
+#  6. execute_action()
+# ═══════════════════════════════════════════════════════════════
+
+class TestExecuteAction:
+    def test_returns_result_from_gateway(self):
+        client = OpenClawClient()
+        resp = _mock_response({"result": "clicked successfully"})
+        with patch("urllib.request.urlopen", return_value=resp):
+            result = client.execute_action({"type": "click", "x": 50, "y": 100})
+        assert result == "clicked successfully"
+
+    def test_sends_action_as_json_body(self):
+        client = OpenClawClient()
+        captured = []
+        def capture(req, timeout=None):
+            captured.append(req)
+            return _mock_response({"result": "ok"})
+        with patch("urllib.request.urlopen", side_effect=capture):
+            client.execute_action({"type": "type", "text": "hello"})
+        body = json.loads(captured[0].data.decode("utf-8"))
+        assert body["type"] == "type"
+        assert body["text"] == "hello"
+
+    def test_posts_to_action_endpoint(self):
+        client = OpenClawClient(base_url="http://127.0.0.1:18789")
+        captured = []
+        def capture(req, timeout=None):
+            captured.append(req)
+            return _mock_response({"result": "ok"})
+        with patch("urllib.request.urlopen", side_effect=capture):
+            client.execute_action({"type": "scroll", "direction": "down"})
+        assert captured[0].full_url == "http://127.0.0.1:18789/action"
+        assert captured[0].method == "POST"
+
+    def test_returns_empty_string_on_network_error(self):
+        client = OpenClawClient()
+        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")):
+            result = client.execute_action({"type": "click", "x": 0, "y": 0})
+        assert result == ""
+
+    def test_returns_empty_string_when_result_key_missing(self):
+        client = OpenClawClient()
+        resp = _mock_response({"status": "ok"})
+        with patch("urllib.request.urlopen", return_value=resp):
+            result = client.execute_action({"type": "click", "x": 0, "y": 0})
+        assert result == ""
+
+    def test_never_raises(self):
+        client = OpenClawClient()
+        with patch("urllib.request.urlopen", side_effect=RuntimeError("boom")):
+            result = client.execute_action({"type": "click", "x": 0, "y": 0})
+        assert result == ""
+
+    def test_vault_token_included_in_auth_header(self, tmp_path):
+        from nexus.core.guardian import GuardianVault
+        v = GuardianVault(str(tmp_path / "v.enc"), master_key="test-master")
+        v.set("OPENCLAW_TOKEN", "gw-token-xyz")
+        client = OpenClawClient(vault=v)
+        captured = []
+        def capture(req, timeout=None):
+            captured.append(req)
+            return _mock_response({"result": "ok"})
+        with patch("urllib.request.urlopen", side_effect=capture):
+            client.execute_action({"type": "click", "x": 0, "y": 0})
+        assert any("gw-token-xyz" in str(v) for v in captured[0].headers.values())

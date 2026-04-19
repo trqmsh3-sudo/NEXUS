@@ -101,7 +101,7 @@ class ProxyCommander:
                 "Send me any task and I will execute it:\n"
                 "  • Find paid gigs on freelancer.com\n"
                 "  • Search remote.co for Python contracts\n\n"
-                "Commands: /help /status"
+                "Commands: /help /status /google_login"
             )
 
         if stripped == "/help":
@@ -111,6 +111,9 @@ class ProxyCommander:
                 "Examples:\n"
                 "  • Find one paid Python contract on freelancer.com\n"
                 "  • Search remote.co for data engineer jobs\n\n"
+                "Commands:\n"
+                "  /status       — recent cycle summary\n"
+                "  /google_login — open accounts.google.com and wait for manual login\n\n"
                 "I will report results when the cycle completes."
             )
 
@@ -119,6 +122,9 @@ class ProxyCommander:
             total = len(history)
             successes = sum(1 for c in history if c.success)
             return f"PROXY status: {successes}/{total} recent cycles succeeded."
+
+        if stripped == "/google_login":
+            return self._handle_google_login()
 
         logger.info("ProxyCommander: running task %r", stripped[:80])
         result = self.omega.run(stripped)
@@ -136,6 +142,49 @@ class ProxyCommander:
         else:
             reason = result.failure_reason or "unknown error"
             return f"✗ Cycle failed: {reason}"
+
+    # ──────────────────────────────────────────────────────────
+    #  Google login via OpenClaw
+    # ──────────────────────────────────────────────────────────
+
+    def _handle_google_login(self) -> str:
+        """Open accounts.google.com via OpenClaw and wait for manual login.
+
+        Sends an immediate Telegram prompt asking the user to log in, then
+        blocks (up to 5 minutes) until OpenClaw reports a successful login.
+        """
+        from nexus.core.openclaw_client import OpenClawClient
+
+        client = OpenClawClient()
+        if not client.is_available():
+            return (
+                "OpenClaw gateway is not reachable. "
+                "Start the browser agent and try again."
+            )
+
+        self.relay.send_message(
+            "Opening accounts.google.com in browser.\n"
+            "Please log in to Google account 2 manually.\n"
+            "I will notify you here when login is detected."
+        )
+        logger.info("ProxyCommander: waiting for Google login via OpenClaw")
+
+        result = client.send(
+            "Navigate to https://accounts.google.com. "
+            "Do not fill in any credentials — wait for the user to log in manually. "
+            "Once the browser shows a Google account dashboard or myaccount.google.com "
+            "(indicating a successful login), respond with exactly: LOGIN_DETECTED. "
+            "Otherwise respond with: WAITING.",
+            timeout=300,
+        )
+
+        if "LOGIN_DETECTED" in result.upper():
+            logger.info("ProxyCommander: Google login detected")
+            return "Google account 2 login detected. Browser is now authenticated."
+        elif result:
+            return f"OpenClaw response: {result}"
+        else:
+            return "No response from OpenClaw (timed out or gateway error)."
 
     # ──────────────────────────────────────────────────────────
     #  Daily report

@@ -832,22 +832,13 @@ class HouseC:
             )
             result = direct_result
         else:
-            # ── AI controller path (DeepSeek vision) ──────────────
-            # Falls back to vision loop when direct fetch finds nothing.
-            deepseek_key = self.router._get_deepseek_key()
-            if deepseek_key:
-                ctrl = OpenClawAIController(client, api_key=deepseek_key)
-                ai_task = (
-                    f"Find: {sso.redefined_problem}. "
-                    "Extract all results as FINDING: lines — include title, URL, rate/price, "
-                    f"key details. Success criteria: {', '.join(sso.success_criteria)}"
-                    f"{payment_instruction}"
-                )
-                result = ctrl.run(ai_task)
-                if not result:
-                    result = "NO_DATA: AI controller returned no findings"
-            else:
-                result = client.send(task, timeout=120)
+            # Direct fetch returned nothing — stop immediately.
+            # Browser automation always fails (Cloudflare blocks server IP).
+            logger.info(
+                "HOUSE-C direct job fetch empty  problem=%r  returning NO_DATA",
+                sso.redefined_problem[:60],
+            )
+            result = "NO_DATA: no listings found via direct API"
 
         # ── SMS verification relay ──────────────────────────────
         # OpenClaw signals it hit an SMS screen with:

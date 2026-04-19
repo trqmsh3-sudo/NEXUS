@@ -1,17 +1,16 @@
-"""Tests for House C — The Builder.
+"""Tests for House C — The Business Action Executor.
 
-LLM calls are mocked via litellm.completion. Subprocess calls for
-validation are mocked where needed so tests run without an API key
-and without spawning pytest sub-processes.
+LLM calls are mocked via the ModelRouter. Subprocess calls for
+action execution are mocked so tests run without network access.
 """
 
 from __future__ import annotations
 
 import json
+import pathlib
 import tempfile
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -33,17 +32,17 @@ from nexus.core.knowledge_graph import KnowledgeGraph
 # ---------------------------------------------------------------------------
 
 def _make_sso(
-    problem: str = "build a fibonacci function",
-    domain: str = "General",
+    problem: str = "Find profitable freelance opportunities",
+    domain: str = "Business Intelligence",
 ) -> StructuredSpecificationObject:
     return StructuredSpecificationObject(
-        original_input="user request",
+        original_input=problem,
         redefined_problem=problem,
-        assumptions=["Input is non-negative integer"],
-        constraints=["Must be pure Python"],
-        success_criteria=["Returns correct Fibonacci number"],
-        required_inputs=["integer n"],
-        expected_outputs=["integer"],
+        assumptions=["Internet available"],
+        constraints=["Use only free sources"],
+        success_criteria=["Identify at least one opportunity"],
+        required_inputs=["public data"],
+        expected_outputs=["list of opportunities"],
         domain=domain,
         confidence=0.85,
     )
@@ -70,42 +69,50 @@ def _failed_report() -> DestructionReport:
 
 
 def _make_graph() -> KnowledgeGraph:
-    import uuid
-    from pathlib import Path
-    path = str(Path(tempfile.gettempdir()) / f"nexus_hc_{uuid.uuid4().hex}.json")
+    path = str(
+        pathlib.Path(tempfile.gettempdir()) / f"nexus_hc_{uuid.uuid4().hex}.json"
+    )
     return KnowledgeGraph(storage_path=path)
 
 
-def _fake_response(content: str) -> MagicMock:
-    """Build a mock litellm completion response."""
-    msg = MagicMock()
-    msg.content = content
-    choice = MagicMock()
-    choice.message = msg
-    resp = MagicMock()
-    resp.choices = [choice]
-    return resp
-
-
-SAMPLE_CODE: str = (
-    "def fibonacci(n: int) -> int:\n"
-    "    if n <= 1:\n"
-    "        return n\n"
-    "    a, b = 0, 1\n"
-    "    for _ in range(2, n + 1):\n"
-    "        a, b = b, a + b\n"
-    "    return b\n"
+SAMPLE_SCRIPT: str = (
+    "# NEXUS Action\n"
+    "import urllib.request, json\n\n"
+    "req = urllib.request.Request(\n"
+    "    'https://www.reddit.com/r/forhire/hot.json?limit=3',\n"
+    "    headers={'User-Agent': 'NEXUS/2.8', 'Accept': 'application/json'},\n"
+    ")\n"
+    "try:\n"
+    "    with urllib.request.urlopen(req, timeout=10) as r:\n"
+    "        data = json.loads(r.read())\n"
+    "    children = data.get('data', {}).get('children', [])\n"
+    "    for c in children[:3]:\n"
+    "        p = c.get('data', {})\n"
+    "        title = p.get('title', '')\n"
+    "        if title:\n"
+    "            print(f'OPPORTUNITY: {title}')\n"
+    "except Exception as e:\n"
+    "    print(f'NO_DATA: {e}')\n"
 )
 
-SAMPLE_TESTS: str = (
-    "from main import fibonacci\n\n"
-    "def test_fib_zero():\n"
-    "    assert fibonacci(0) == 0\n\n"
-    "def test_fib_one():\n"
-    "    assert fibonacci(1) == 1\n\n"
-    "def test_fib_ten():\n"
-    "    assert fibonacci(10) == 55\n"
+SAMPLE_OUTPUT: str = (
+    "OPPORTUNITY: [HIRING] AI integration specialist $80/hr remote\n"
+    "OPPORTUNITY: [FOR HIRE] Business automation consulting\n"
 )
+
+
+def _mock_popen_success(cmd, **kwargs):
+    proc = MagicMock()
+    proc.communicate.return_value = (SAMPLE_OUTPUT, "")
+    proc.returncode = 0
+    return proc
+
+
+def _mock_popen_failure(cmd, **kwargs):
+    proc = MagicMock()
+    proc.communicate.return_value = ("", "ConnectionError: network unreachable")
+    proc.returncode = 1
+    return proc
 
 
 # ---------------------------------------------------------------------------
@@ -156,71 +163,6 @@ class TestBuildResult:
 
 
 # ---------------------------------------------------------------------------
-# House C — test sanitizer & primary-function selection (v2.7)
-# ---------------------------------------------------------------------------
-
-class TestHouseCTestSanitizer:
-    """Regression: wrong first function must not break TypeError stripping."""
-
-    def test_primary_is_sso_named_not_first_helper(self) -> None:
-        code = (
-            "# NEXUS Build\n"
-            "def _helper():\n"
-            "    return 1\n\n"
-            "def is_even(n: int) -> bool:\n"
-            "    return n % 2 == 0\n"
-        )
-        sso = StructuredSpecificationObject(
-            original_input="Write a Python function is_even(n: int) -> bool",
-            redefined_problem="parity check",
-            assumptions=[],
-            constraints=[],
-            success_criteria=[],
-            required_inputs=[],
-            expected_outputs=[],
-            domain="General",
-            confidence=0.9,
-        )
-        name, types = HouseC._extract_primary_signature(code, sso)
-        assert name == "is_even"
-        assert types == ["int"]
-
-    def test_drops_typeerror_block_for_matching_callee(self) -> None:
-        code = (
-            "def helper():\n"
-            "    return 1\n\n"
-            "def is_even(n: int) -> bool:\n"
-            "    return n % 2 == 0\n"
-        )
-        sigs = HouseC._collect_top_level_signatures(code)
-        tests = (
-            "import pytest\n"
-            "from main import is_even\n\n"
-            "def test_bad_typeexpect():\n"
-            "    with pytest.raises(TypeError):\n"
-            "        is_even(4)\n\n"
-            "def test_ok():\n"
-            "    assert is_even(2) is True\n"
-        )
-        hc = HouseC(knowledge_graph=_make_graph())
-        sso = StructuredSpecificationObject(
-            original_input="is_even(n: int) -> bool",
-            redefined_problem="test",
-            assumptions=[],
-            constraints=[],
-            success_criteria=[],
-            required_inputs=[],
-            expected_outputs=[],
-            domain="General",
-            confidence=0.9,
-        )
-        out = hc._sanitize_generated_tests(sso, code, tests)
-        assert "test_bad_typeexpect" not in out
-        assert "test_ok" in out
-        assert "is_even(4)" not in out
-
-
-# ---------------------------------------------------------------------------
 # HouseC._strip_fences
 # ---------------------------------------------------------------------------
 
@@ -256,123 +198,65 @@ class TestBuildGate:
         with pytest.raises(ValueError, match="did not survive House D"):
             hc.build(_make_sso(), _failed_report())
 
-    @patch("nexus.core.model_router.litellm")
-    @patch("nexus.core.house_c.subprocess.Popen")
-    def test_accepts_survived_report(
-        self, mock_popen: MagicMock, mock_litellm: MagicMock, tmp_path: Any,
-    ) -> None:
-        mock_litellm.completion.return_value = _fake_response(SAMPLE_CODE)
-        mock_proc = MagicMock()
-        mock_proc.communicate.return_value = ("all passed", "")
-        mock_proc.returncode = 0
-        mock_popen.return_value = mock_proc
-
+    def test_accepts_survived_report(self, tmp_path: Any) -> None:
+        router = MagicMock()
+        router.complete.return_value = SAMPLE_SCRIPT
         hc = HouseC(
             knowledge_graph=_make_graph(),
+            router=router,
             workspace_dir=str(tmp_path),
         )
-        result = hc.build(_make_sso(), _survived_report())
+        with patch("nexus.core.house_c.subprocess.Popen", _mock_popen_success):
+            result = hc.build(_make_sso(), _survived_report())
         assert result.success is True
         assert result.ready_for_house_a is True
 
 
 # ---------------------------------------------------------------------------
-# HouseC._generate_code (mocked LLM)
+# HouseC._execute_action (mocked subprocess)
 # ---------------------------------------------------------------------------
 
-class TestGenerateCode:
-    """Tests for code generation."""
+class TestExecuteAction:
+    """Tests for the action execution runner."""
 
-    @patch("nexus.core.model_router.litellm")
-    def test_returns_stripped_code(self, mock_litellm: MagicMock) -> None:
-        mock_litellm.completion.return_value = _fake_response("```python\ndef foo(): pass\n```")
-        hc = HouseC(knowledge_graph=_make_graph())
-        code = hc._generate_code(_make_sso())
-        assert "def foo():" in code
-        assert "```" not in code
-
-    @patch("nexus.core.model_router.litellm")
-    def test_prompt_includes_constraints(self, mock_litellm: MagicMock) -> None:
-        mock_litellm.completion.return_value = _fake_response("def foo(): pass")
-        hc = HouseC(knowledge_graph=_make_graph())
-        hc._generate_code(_make_sso())
-        user_msg = mock_litellm.completion.call_args[1]["messages"][1]["content"]
-        assert "Must be pure Python" in user_msg
-
-
-# ---------------------------------------------------------------------------
-# HouseC._generate_tests (mocked LLM)
-# ---------------------------------------------------------------------------
-
-class TestGenerateTests:
-    """Tests for test generation."""
-
-    @patch("nexus.core.model_router.litellm")
-    def test_returns_stripped_tests(self, mock_litellm: MagicMock) -> None:
-        mock_litellm.completion.return_value = _fake_response("```python\ndef test_x(): assert True\n```")
-        hc = HouseC(knowledge_graph=_make_graph())
-        tests = hc._generate_tests(_make_sso(), "def x(): return 1")
-        assert "def test_x():" in tests
-        assert "```" not in tests
-
-    @patch("nexus.core.model_router.litellm")
-    def test_prompt_includes_code(self, mock_litellm: MagicMock) -> None:
-        mock_litellm.completion.return_value = _fake_response("def test_x(): assert True")
-        hc = HouseC(knowledge_graph=_make_graph())
-        hc._generate_tests(_make_sso(), "def fibonacci(n): return n")
-        user_msg = mock_litellm.completion.call_args[1]["messages"][1]["content"]
-        assert "def fibonacci(n)" in user_msg
-
-
-# ---------------------------------------------------------------------------
-# HouseC._validate (mocked subprocess)
-# ---------------------------------------------------------------------------
-
-class TestValidate:
-    """Tests for the validation subprocess runner."""
-
-    def test_passed_validation(self, tmp_path: Any) -> None:
+    def test_success_on_zero_exit_with_output(self, tmp_path: Any) -> None:
         hc = HouseC(
             knowledge_graph=_make_graph(),
             workspace_dir=str(tmp_path),
         )
-        artifact = BuildArtifact(code=SAMPLE_CODE, tests=SAMPLE_TESTS)
-
-        with patch("nexus.core.house_c.subprocess.Popen") as mock_popen:
-            mock_proc = MagicMock()
-            mock_proc.communicate.return_value = ("3 passed", "")
-            mock_proc.returncode = 0
-            mock_popen.return_value = mock_proc
-            result = hc._validate(artifact)
-
+        artifact = BuildArtifact(code=SAMPLE_SCRIPT)
+        with patch("nexus.core.house_c.subprocess.Popen", _mock_popen_success):
+            result = hc._execute_action(artifact)
         assert result.passed_validation is True
-        assert result.execution_proof == "3 passed"
-        assert result.validation_errors == []
+        assert result.execution_proof is not None
+        assert "OPPORTUNITY" in result.execution_proof
 
-    def test_failed_validation(self, tmp_path: Any) -> None:
+    def test_failure_on_nonzero_exit(self, tmp_path: Any) -> None:
         hc = HouseC(
             knowledge_graph=_make_graph(),
             workspace_dir=str(tmp_path),
         )
-        artifact = BuildArtifact(code="bad code", tests="bad tests")
-
-        with (
-            patch("nexus.core.house_c.subprocess.Popen") as mock_popen,
-            patch("nexus.core.model_router.litellm") as mock_litellm,
-        ):
-            mock_proc = MagicMock()
-            mock_proc.communicate.return_value = ("FAILED", "Error details")
-            mock_proc.returncode = 1
-            mock_popen.return_value = mock_proc
-            mock_litellm.completion.return_value = _fake_response(
-                "def test_healed(): assert True",
-            )
-            result = hc._validate(artifact)
-
+        artifact = BuildArtifact(code=SAMPLE_SCRIPT)
+        with patch("nexus.core.house_c.subprocess.Popen", _mock_popen_failure):
+            result = hc._execute_action(artifact)
         assert result.passed_validation is False
         assert len(result.validation_errors) == 1
-        assert "FAILED" in result.validation_errors[0]
-        assert result.healing_attempts == 2
+
+    def test_failure_on_no_data_output(self, tmp_path: Any) -> None:
+        def popen_no_data(cmd, **kwargs):
+            proc = MagicMock()
+            proc.communicate.return_value = ("NO_DATA: connection refused\n", "")
+            proc.returncode = 0
+            return proc
+
+        hc = HouseC(
+            knowledge_graph=_make_graph(),
+            workspace_dir=str(tmp_path),
+        )
+        artifact = BuildArtifact(code=SAMPLE_SCRIPT)
+        with patch("nexus.core.house_c.subprocess.Popen", popen_no_data):
+            result = hc._execute_action(artifact)
+        assert result.passed_validation is False
 
     def test_creates_workspace_dir(self, tmp_path: Any) -> None:
         workspace = tmp_path / "deep" / "nested"
@@ -380,17 +264,12 @@ class TestValidate:
             knowledge_graph=_make_graph(),
             workspace_dir=str(workspace),
         )
-        artifact = BuildArtifact(code="x=1", tests="pass")
-
-        with patch("nexus.core.house_c.subprocess.Popen") as mock_popen:
-            mock_proc = MagicMock()
-            mock_proc.communicate.return_value = ("ok", "")
-            mock_proc.returncode = 0
-            mock_popen.return_value = mock_proc
-            hc._validate(artifact)
-
+        artifact = BuildArtifact(code=SAMPLE_SCRIPT)
+        with patch("nexus.core.house_c.subprocess.Popen", _mock_popen_success):
+            hc._execute_action(artifact)
         build_dir = workspace / artifact.artifact_id
         assert build_dir.exists()
+        assert (build_dir / "action.py").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -405,14 +284,13 @@ class TestSaveToWorkspace:
             knowledge_graph=_make_graph(),
             workspace_dir=str(tmp_path),
         )
-        artifact = BuildArtifact(code="x=1", tests="assert True")
+        artifact = BuildArtifact(code=SAMPLE_SCRIPT)
         path = hc._save_to_workspace(artifact)
         assert path.endswith("artifact.json")
 
-        import pathlib
         data = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
         assert data["artifact_id"] == artifact.artifact_id
-        assert data["code"] == "x=1"
+        assert data["code"] == SAMPLE_SCRIPT
 
 
 # ---------------------------------------------------------------------------
@@ -425,16 +303,18 @@ class TestToBeliefCertificate:
     def test_passed_artifact_high_confidence(self) -> None:
         hc = HouseC(knowledge_graph=_make_graph())
         artifact = BuildArtifact(
-            sso=_make_sso(problem="build fib"),
-            code="def fib(n): ...",
+            sso=_make_sso(problem="find opportunities"),
+            code=SAMPLE_SCRIPT,
             passed_validation=True,
-            execution_proof="3 passed in 0.01s",
+            execution_proof="OPPORTUNITY: AI tools $80/hr",
         )
         cert = hc.to_belief_certificate(artifact)
-        assert cert.confidence == 0.9
-        assert cert.executable_proof == "def fib(n): ..."
+        assert cert.confidence == 0.88
+        # execution_proof set → static print-snippet, not the raw script
+        assert cert.executable_proof is not None
+        assert "# NEXUS verified findings" in cert.executable_proof
+        assert "OPPORTUNITY" in cert.executable_proof
         assert cert.is_valid() is True
-        assert "build fib" in cert.claim
 
     def test_failed_artifact_low_confidence(self) -> None:
         hc = HouseC(knowledge_graph=_make_graph())
@@ -450,85 +330,124 @@ class TestToBeliefCertificate:
     def test_domain_propagated(self) -> None:
         hc = HouseC(knowledge_graph=_make_graph())
         artifact = BuildArtifact(
-            sso=_make_sso(domain="ML Architecture"),
-            code="x = 1\n",
+            sso=_make_sso(domain="Market Research"),
+            code=SAMPLE_SCRIPT,
             passed_validation=True,
-            execution_proof="ok",
+            execution_proof="OPPORTUNITY: SaaS tools",
         )
         cert = hc.to_belief_certificate(artifact)
-        assert cert.domain == "ML Architecture"
-        assert cert.executable_proof == "x = 1"
+        assert cert.domain == "Market Research"
+        # execution_proof set → static print-snippet, not the raw script
+        assert cert.executable_proof is not None
+        assert "# NEXUS verified findings" in cert.executable_proof
+        assert "SaaS tools" in cert.executable_proof
 
 
 # ---------------------------------------------------------------------------
-# Full pipeline (mocked LLM + mocked subprocess)
+# Full pipeline (mocked router + mocked subprocess)
 # ---------------------------------------------------------------------------
 
 class TestFullPipeline:
     """End-to-end tests for the build pipeline."""
 
-    @patch("nexus.core.model_router.litellm")
-    @patch("nexus.core.house_c.subprocess.Popen")
-    def test_success_pipeline(
-        self, mock_popen: MagicMock, mock_litellm: MagicMock, tmp_path: Any,
-    ) -> None:
-        mock_litellm.completion.return_value = _fake_response(SAMPLE_CODE)
-        mock_proc = MagicMock()
-        mock_proc.communicate.return_value = ("3 passed", "")
-        mock_proc.returncode = 0
-        mock_popen.return_value = mock_proc
-
+    def test_success_pipeline(self, tmp_path: Any) -> None:
+        router = MagicMock()
+        router.complete.return_value = SAMPLE_SCRIPT
         hc = HouseC(
             knowledge_graph=_make_graph(),
+            router=router,
             workspace_dir=str(tmp_path),
         )
-        result = hc.build(_make_sso(), _survived_report())
+        with patch("nexus.core.house_c.subprocess.Popen", _mock_popen_success):
+            result = hc.build(_make_sso(), _survived_report())
 
         assert result.success is True
         assert result.ready_for_house_a is True
         assert result.artifact.passed_validation is True
-        assert result.artifact.execution_proof == "3 passed"
-        assert mock_litellm.completion.call_count == 2
+        assert result.artifact.execution_proof is not None
+        # Only one LLM call now (generate_action_script, no test generation)
+        assert router.complete.call_count == 1
 
-    @patch("nexus.core.model_router.litellm")
-    @patch("nexus.core.house_c.subprocess.Popen")
-    def test_failed_validation_not_ready(
-        self, mock_popen: MagicMock, mock_litellm: MagicMock, tmp_path: Any,
-    ) -> None:
-        mock_litellm.completion.return_value = _fake_response(SAMPLE_CODE)
-        mock_proc = MagicMock()
-        mock_proc.communicate.return_value = ("FAILED", "err")
-        mock_proc.returncode = 1
-        mock_popen.return_value = mock_proc
-
+    def test_failed_validation_not_ready(self, tmp_path: Any) -> None:
+        router = MagicMock()
+        router.complete.return_value = SAMPLE_SCRIPT
         hc = HouseC(
             knowledge_graph=_make_graph(),
+            router=router,
             workspace_dir=str(tmp_path),
         )
-        result = hc.build(_make_sso(), _survived_report())
+        with patch("nexus.core.house_c.subprocess.Popen", _mock_popen_failure):
+            result = hc.build(_make_sso(), _survived_report())
 
         assert result.success is False
         assert result.ready_for_house_a is False
 
-    @patch("nexus.core.model_router.litellm")
-    @patch("nexus.core.house_c.subprocess.Popen")
-    def test_artifact_saved_to_workspace(
-        self, mock_popen: MagicMock, mock_litellm: MagicMock, tmp_path: Any,
-    ) -> None:
-        mock_litellm.completion.return_value = _fake_response(SAMPLE_CODE)
-        mock_proc = MagicMock()
-        mock_proc.communicate.return_value = ("3 passed", "")
-        mock_proc.returncode = 0
-        mock_popen.return_value = mock_proc
+    def test_artifact_saved_to_workspace(self, tmp_path: Any) -> None:
+        router = MagicMock()
+        router.complete.return_value = SAMPLE_SCRIPT
+        hc = HouseC(
+            knowledge_graph=_make_graph(),
+            router=router,
+            workspace_dir=str(tmp_path),
+        )
+        with patch("nexus.core.house_c.subprocess.Popen", _mock_popen_success):
+            result = hc.build(_make_sso(), _survived_report())
+
+        artifact_dir = pathlib.Path(tmp_path) / result.artifact.artifact_id
+        assert (artifact_dir / "action.py").exists()
+        assert (artifact_dir / "artifact.json").exists()
+
+
+class TestDirectJobFetcherFallback:
+    """direct fetch empty → NO_DATA immediately, no AI controller."""
+
+    def test_no_data_immediately_when_direct_fetch_empty(self):
+        from nexus.core.openclaw_client import OpenClawClient
+        mock_client = MagicMock(spec=OpenClawClient)
+        mock_client.is_available.return_value = True
 
         hc = HouseC(
             knowledge_graph=_make_graph(),
-            workspace_dir=str(tmp_path),
+            router=MagicMock(),
+            openclaw_client=mock_client,
         )
-        result = hc.build(_make_sso(), _survived_report())
 
-        import pathlib
-        artifact_dir = pathlib.Path(tmp_path) / result.artifact.artifact_id
-        assert (artifact_dir / "main.py").exists()
-        assert (artifact_dir / "test_main.py").exists()
-        assert (artifact_dir / "artifact.json").exists()
+        sso = StructuredSpecificationObject(
+            original_input="find jobs",
+            redefined_problem="Find Python remote gigs",
+            success_criteria=["find at least one listing"],
+        )
+
+        with patch("nexus.core.house_c.DirectJobFetcher") as mock_fetcher_cls, \
+             patch("nexus.core.house_c.OpenClawAIController") as mock_ctrl_cls:
+            mock_fetcher_cls.return_value.fetch.return_value = ""
+            result = hc.build(sso, _survived_report())
+
+        mock_ctrl_cls.assert_not_called()
+        assert result.success is False
+
+    def test_ai_controller_not_called_when_direct_fetch_empty(self):
+        """OpenClawAIController.run() must never be called when direct fetch returns ''."""
+        from nexus.core.openclaw_client import OpenClawClient
+        mock_client = MagicMock(spec=OpenClawClient)
+        mock_client.is_available.return_value = True
+
+        hc = HouseC(
+            knowledge_graph=_make_graph(),
+            router=MagicMock(),
+            openclaw_client=mock_client,
+        )
+
+        with patch("nexus.core.house_c.DirectJobFetcher") as mock_fetcher_cls, \
+             patch("nexus.core.house_c.OpenClawAIController") as mock_ctrl_cls:
+            mock_fetcher_cls.return_value.fetch.return_value = ""
+            hc.build(
+                StructuredSpecificationObject(
+                    original_input="x",
+                    redefined_problem="Find design gigs",
+                    success_criteria=["one listing"],
+                ),
+                _survived_report(),
+            )
+
+        mock_ctrl_cls.return_value.run.assert_not_called()

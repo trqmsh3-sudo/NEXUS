@@ -107,7 +107,7 @@ TIER_3_POWERFUL: list[str] = [
     "openrouter/google/gemini-2.5-pro",
 ]
 
-MAX_DAILY_COST: float = 0.30  # USD
+MAX_DAILY_COST: float = 0.50  # USD
 _COST_FILE: pathlib.Path = pathlib.Path("data/daily_cost.json")
 _BLACKLIST_FILE: pathlib.Path = pathlib.Path("data/model_blacklist.json")
 _GEMINI_RL_FILE: pathlib.Path = pathlib.Path("data/gemini_rate_limits.json")

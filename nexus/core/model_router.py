@@ -247,6 +247,8 @@ class ModelRouter:
             ]
         if not _groq_key:
             models_to_try = [m for m in models_to_try if not m.startswith("groq/")]
+        if not _gemini_key:
+            models_to_try = [m for m in models_to_try if not m.startswith("gemini/")]
 
         messages: list[dict[str, str]] = [
             {"role": "system", "content": clean_text(system)},

@@ -42,6 +42,19 @@ _SYSTEM_PROMPT = (
 
 _NON_FORWARDED = {"extract_data", "task_complete"}
 
+_DEFAULT_START_URL = "https://www.freelancer.com/projects"
+
+# Ordered: first match wins. Keys are lowercase substrings to detect in task.
+_SITE_MAP: list[tuple[str, str]] = [
+    ("freelancer.com",      "https://www.freelancer.com/projects"),
+    ("remote.co",           "https://remote.co/remote-jobs/"),
+    ("remoteok.com",        "https://remoteok.com"),
+    ("weworkremotely",      "https://weworkremotely.com"),
+    ("indeed.com",          "https://www.indeed.com"),
+    ("fiverr.com",          "https://www.fiverr.com"),
+    ("peopleperhour",       "https://www.peopleperhour.com"),
+]
+
 
 class OpenClawAIController:
     """Vision-based browser control loop powered by DeepSeek + OpenClaw.
@@ -68,13 +81,25 @@ class OpenClawAIController:
     #  Public API
     # ──────────────────────────────────────────────────────────
 
+    def _extract_start_url(self, task: str) -> str:
+        """Return the best start URL for the task, or the default."""
+        lower = task.lower()
+        for keyword, url in _SITE_MAP:
+            if keyword in lower:
+                return url
+        return _DEFAULT_START_URL
+
     def run(self, task: str) -> str:
-        """Execute *task* using the vision-action loop.
+        """Navigate to the task URL then execute the vision-action loop.
 
         Returns all FINDING lines joined by newlines, or an empty string
         if nothing was found or the loop failed before completing.
         """
         findings: list[str] = []
+
+        start_url = self._extract_start_url(task)
+        logger.info("OpenClawAIController: navigating to %s", start_url)
+        self.client.execute_action({"type": "navigate", "url": start_url})
 
         for step in range(self.MAX_STEPS):
             screenshot_b64 = self.client.screenshot()

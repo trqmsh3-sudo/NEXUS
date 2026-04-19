@@ -66,11 +66,14 @@ class TestScreenshotFailure:
             ctrl.run("find jobs")
         mock_llm.assert_not_called()
 
-    def test_no_execute_action_when_screenshot_fails(self):
+    def test_no_execute_action_beyond_navigate_when_screenshot_fails(self):
         client = _make_client(screenshots=[""])
         ctrl = OpenClawAIController(client, api_key="test-key")
         ctrl.run("find jobs")
-        client.execute_action.assert_not_called()
+        # Only the pre-loop navigate should have been called
+        calls = client.execute_action.call_args_list
+        assert len(calls) == 1
+        assert calls[0][0][0]["type"] == "navigate"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -86,13 +89,15 @@ class TestTaskComplete:
             result = ctrl.run("find jobs")
         assert result == "summary of results"
 
-    def test_no_execute_action_on_task_complete(self):
+    def test_no_execute_action_beyond_navigate_on_task_complete(self):
         client = _make_client(screenshots=["img"])
         ctrl = OpenClawAIController(client, api_key="test-key")
         action = {"type": "task_complete", "data": "done", "description": "finished"}
         with patch("litellm.completion", return_value=_litellm_response(action)):
             ctrl.run("find jobs")
-        client.execute_action.assert_not_called()
+        calls = client.execute_action.call_args_list
+        assert len(calls) == 1
+        assert calls[0][0][0]["type"] == "navigate"
 
     def test_empty_data_field_returns_empty_string(self):
         client = _make_client(screenshots=["img"])
@@ -134,7 +139,7 @@ class TestExtractData:
         assert "Job A" in lines[0]
         assert "Job B" in lines[1]
 
-    def test_extract_data_action_not_forwarded_to_execute_action(self):
+    def test_extract_data_not_forwarded_beyond_initial_navigate(self):
         client = _make_client(screenshots=["img1", "img2"])
         ctrl = OpenClawAIController(client, api_key="test-key")
         actions = [
@@ -143,7 +148,9 @@ class TestExtractData:
         ]
         with patch("litellm.completion", side_effect=[_litellm_response(a) for a in actions]):
             ctrl.run("find jobs")
-        client.execute_action.assert_not_called()
+        calls = client.execute_action.call_args_list
+        assert len(calls) == 1
+        assert calls[0][0][0]["type"] == "navigate"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -160,9 +167,10 @@ class TestActionExecution:
         ]
         with patch("litellm.completion", side_effect=[_litellm_response(a) for a in actions]):
             ctrl.run("submit form")
-        client.execute_action.assert_called_once_with(
+        # First call is the pre-loop navigate; second is the click
+        calls = client.execute_action.call_args_list
+        assert calls[1][0][0] == \
             {"type": "click", "x": 150, "y": 300, "description": "click submit"}
-        )
 
     def test_type_action_forwarded_with_text(self):
         client = _make_client(screenshots=["img1", "img2"])
@@ -200,11 +208,12 @@ class TestActionExecution:
         ]
         with patch("litellm.completion", side_effect=[_litellm_response(a) for a in actions]):
             ctrl.run("search")
-        assert client.execute_action.call_count == 2
-        first_call = client.execute_action.call_args_list[0][0][0]
-        second_call = client.execute_action.call_args_list[1][0][0]
-        assert first_call["type"] == "click"
-        assert second_call["type"] == "type"
+        # call[0]=navigate, call[1]=click, call[2]=type
+        assert client.execute_action.call_count == 3
+        calls = client.execute_action.call_args_list
+        assert calls[0][0][0]["type"] == "navigate"
+        assert calls[1][0][0]["type"] == "click"
+        assert calls[2][0][0]["type"] == "type"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -239,7 +248,10 @@ class TestDeepSeekFailure:
         with patch("litellm.completion", side_effect=Exception("API error")):
             result = ctrl.run("find jobs")
         assert result == ""
-        client.execute_action.assert_not_called()
+        # Only the pre-loop navigate should have been called
+        calls = client.execute_action.call_args_list
+        assert len(calls) == 1
+        assert calls[0][0][0]["type"] == "navigate"
 
     def test_api_exception_does_not_propagate(self):
         client = _make_client(screenshots=["img"])

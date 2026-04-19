@@ -18,6 +18,14 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_STATE_FILE = Path("data/strategy_state.json")
 
+# Imported lazily to avoid circular imports
+def _get_claude_consultant():  # noqa: ANN202
+    try:
+        from nexus.core.claude_consultant import ClaudeConsultant
+        return ClaudeConsultant()
+    except Exception:
+        return None
+
 # (task_string, domain_tag, platform)
 # domain_tag groups related tasks so failures are tracked together.
 _PORTFOLIO: list[tuple[str, str, str]] = [
@@ -134,9 +142,11 @@ class StrategicAgent:
         self._state = self._load_state()
         domain = self._task_domain(task)
         failures = self._state.setdefault("domain_failures", {})
+        successes = self._state.setdefault("domain_successes", {})
 
         if success:
             failures[domain] = 0
+            successes[domain] = successes.get(domain, 0) + 1
             logger.info("StrategicAgent: success on domain=%r — failures reset", domain)
         else:
             failures[domain] = failures.get(domain, 0) + 1
@@ -144,8 +154,29 @@ class StrategicAgent:
                 "StrategicAgent: failure on domain=%r — consecutive_failures=%d",
                 domain, failures[domain],
             )
+            # When a domain just hit the failure threshold, consult Claude
+            if failures[domain] == self.MAX_DOMAIN_FAILURES:
+                self._consult_claude_for_strategy(failures, successes)
 
         self._save_state()
+
+    def _consult_claude_for_strategy(
+        self,
+        failures: dict[str, int],
+        successes: dict[str, int],
+    ) -> None:
+        """Ask Claude for a new strategy when a domain is blocked. Logs suggestion only."""
+        consultant = _get_claude_consultant()
+        if consultant is None or not consultant.is_available():
+            return
+        recent_failures = [d for d, n in failures.items() if n >= self.MAX_DOMAIN_FAILURES]
+        recent_successes = [d for d, n in successes.items() if n > 0]
+        suggestion = consultant.suggest_strategy(
+            recent_failures=recent_failures,
+            recent_successes=recent_successes,
+        )
+        if suggestion:
+            logger.info("StrategicAgent: Claude suggests — %s", suggestion)
 
     def _task_domain(self, task: str) -> str:
         """Return the domain tag for a task string, or 'unknown'."""

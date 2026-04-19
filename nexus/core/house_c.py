@@ -32,6 +32,7 @@ from typing import Any
 from nexus.core.belief_certificate import BeliefCertificate
 from nexus.core.house_b import StructuredSpecificationObject
 from nexus.core.house_d import DestructionReport
+from nexus.core.direct_job_fetcher import DirectJobFetcher
 from nexus.core.knowledge_graph import KnowledgeGraph
 from nexus.core.model_router import ModelRouter
 from nexus.core.openclaw_ai_controller import OpenClawAIController
@@ -821,23 +822,32 @@ class HouseC:
             "- If you cannot retrieve any data after trying, respond with: NO_DATA: <reason>"
         )
 
-        # ── AI controller path (DeepSeek vision) ───────────────
-        # Use screenshot→DeepSeek→action loop when a key is available.
-        # Falls back to single-shot client.send() when no key is found.
-        deepseek_key = self.router._get_deepseek_key()
-        if deepseek_key:
-            ctrl = OpenClawAIController(client, api_key=deepseek_key)
-            ai_task = (
-                f"Find: {sso.redefined_problem}. "
-                "Extract all results as FINDING: lines — include title, URL, rate/price, "
-                f"key details. Success criteria: {', '.join(sso.success_criteria)}"
-                f"{payment_instruction}"
+        # ── Direct API path (no browser, no Cloudflare issues) ──
+        # Try remoteok.com JSON API first — fast, reliable, no bot protection.
+        direct_result = DirectJobFetcher().fetch(sso.redefined_problem)
+        if direct_result:
+            logger.info(
+                "HOUSE-C direct job fetch succeeded  problem=%r  findings=%d",
+                sso.redefined_problem[:60], direct_result.count("FINDING:"),
             )
-            result = ctrl.run(ai_task)
-            if not result:
-                result = "NO_DATA: AI controller returned no findings"
+            result = direct_result
         else:
-            result = client.send(task, timeout=120)
+            # ── AI controller path (DeepSeek vision) ──────────────
+            # Falls back to vision loop when direct fetch finds nothing.
+            deepseek_key = self.router._get_deepseek_key()
+            if deepseek_key:
+                ctrl = OpenClawAIController(client, api_key=deepseek_key)
+                ai_task = (
+                    f"Find: {sso.redefined_problem}. "
+                    "Extract all results as FINDING: lines — include title, URL, rate/price, "
+                    f"key details. Success criteria: {', '.join(sso.success_criteria)}"
+                    f"{payment_instruction}"
+                )
+                result = ctrl.run(ai_task)
+                if not result:
+                    result = "NO_DATA: AI controller returned no findings"
+            else:
+                result = client.send(task, timeout=120)
 
         # ── SMS verification relay ──────────────────────────────
         # OpenClaw signals it hit an SMS screen with:

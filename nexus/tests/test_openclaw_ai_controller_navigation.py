@@ -88,9 +88,9 @@ class TestExtractStartUrl:
         assert self._url("Browse peopleperhour.com") == \
             "https://www.peopleperhour.com"
 
-    def test_no_known_site_returns_freelancer_default(self):
+    def test_no_known_site_returns_remoteok_default(self):
         assert self._url("Find a paid opportunity online") == \
-            "https://www.freelancer.com/projects"
+            "https://remoteok.com"
 
     def test_match_is_case_insensitive(self):
         assert self._url("Check FREELANCER.COM projects") == \
@@ -143,7 +143,7 @@ class TestRunNavigation:
         nav_calls = [c for c in client.execute_action.call_args_list
                      if c[0][0].get("type") == "navigate"]
         assert len(nav_calls) == 1
-        assert nav_calls[0][0][0]["url"] == "https://www.freelancer.com/projects"
+        assert nav_calls[0][0][0]["url"] == "https://remoteok.com"
 
     def test_navigate_uses_remote_co_url(self):
         client = _make_client(screenshots=["img"])
